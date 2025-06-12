@@ -1,0 +1,15 @@
+name: lower-body-muscle-qMRI-pipeline
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - numpy
+  - pandas
+  - matplotlib
+  - scipy
+  - pytorch
+  - simpleitk
+  - pip
+  - pip:
+    - SimpleElastix
