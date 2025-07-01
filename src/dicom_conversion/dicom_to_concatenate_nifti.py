@@ -2,7 +2,19 @@ import os
 import re
 import nibabel as nib
 import numpy as np
+#import dcm2niix
+import pydicom
+from pathlib import Path
+import subprocess, shutil, tempfile
+import dicom2nifti
 from nibabel.orientations import aff2axcodes
+
+dicomDataPath = "/home/martin/data_imaging/Muscle/data_sarcopenia_tx/dicom/"
+niftiOtuputPath = "/home/martin/data_imaging/Muscle/data_sarcopenia_tx/nifti_output/"
+
+if not os.path.exists(niftiOtuputPath):
+    os.makedirs(niftiOtuputPath, exist_ok=True)
+
 print("Script started")
 
 def cargar_slices_dicom(dicom_folder):
@@ -55,7 +67,9 @@ def convertir_todos_los_voluntarios(dicom_base_folder, carpeta_salida_base):
 
         os.makedirs(carpeta_salida, exist_ok=True)
 
-        for nombre_subcarpeta in sorted(os.listdir(carpeta_dicom)):
+        dicom2nifti.convert_directory(carpeta_dicom, carpeta_salida,
+                              compression=True, reorient=True)
+        """ for nombre_subcarpeta in sorted(os.listdir(carpeta_dicom)):
             ruta_subcarpeta = os.path.join(carpeta_dicom, nombre_subcarpeta)
             if not os.path.isdir(ruta_subcarpeta):
                 continue
@@ -68,7 +82,7 @@ def convertir_todos_los_voluntarios(dicom_base_folder, carpeta_salida_base):
                 continue
 
             output_file = os.path.join(carpeta_salida, f"{nombre_subcarpeta}.nii.gz")
-            convertir_a_nifti(slices, output_file)
+            convertir_a_nifti(slices, output_file) """
 
 def concatenar_niftis_en_grupos(carpeta_salida_base):
     print("concatenar_niftis_en_grupos")
@@ -142,10 +156,9 @@ def concatenar_niftis_en_grupos(carpeta_salida_base):
                 print(f"  {archivo}")
 
 # Script entry point
-
-#convertir_todos_los_voluntarios(
-#      "/data/MuscleSegmentation/Data/Gluteus&Lumbar/dicom",
-#      "/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifty_output")
+convertir_todos_los_voluntarios(
+    dicomDataPath,
+    niftiOtuputPath)
 
 # Group-wise concatenation
-concatenar_niftis_en_grupos("/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifty_output")
+concatenar_niftis_en_grupos(niftiOtuputPath)
