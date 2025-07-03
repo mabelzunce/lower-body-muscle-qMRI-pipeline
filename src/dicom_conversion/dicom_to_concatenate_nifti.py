@@ -8,8 +8,11 @@ from pathlib import Path
 import subprocess, shutil, tempfile
 import dicom2nifti
 from nibabel.orientations import aff2axcodes
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), "../utils"))
+from utils import apply_bias_correction
 
-dicomDataPath = "/home/martin/data_imaging/Muscle/data_sarcopenia_tx/dicom/"
+dicomDataPath = "/home/martin/data_imaging/Muscle/data_sarcopenia_tx/dicom_test/"
 niftiOtuputPath = "/home/martin/data_imaging/Muscle/data_sarcopenia_tx/nifti_output/"
 
 if not os.path.exists(niftiOtuputPath):
@@ -17,7 +20,7 @@ if not os.path.exists(niftiOtuputPath):
 
 print("Script started")
 
-def cargar_slices_dicom(dicom_folder):
+def cargar_slices_dicom(dicom_folder):      
     print("def cargar_slices_dicom(dicom_folder)")
     slices = []
     for filename in sorted(os.listdir(dicom_folder)):
@@ -84,7 +87,7 @@ def convertir_todos_los_voluntarios(dicom_base_folder, carpeta_salida_base):
             output_file = os.path.join(carpeta_salida, f"{nombre_subcarpeta}.nii.gz")
             convertir_a_nifti(slices, output_file) """
 
-def concatenar_niftis_en_grupos(carpeta_salida_base):
+def concatenar_niftis_en_grupos(carpeta_salida_base, apply_bias_correction=False):
     print("concatenar_niftis_en_grupos")
     for nombre_voluntario in sorted(os.listdir(carpeta_salida_base)):
         ruta_voluntario = os.path.join(carpeta_salida_base, nombre_voluntario)
@@ -96,15 +99,15 @@ def concatenar_niftis_en_grupos(carpeta_salida_base):
         grupos = {}
         archivos_unicos = []
 
-        pattern = re.compile(r".*_(F|IN|OPP|W)_(\d+)\.nii\.gz$")
+        pattern = re.compile(r"^(\d+).*_(f|in|opp|w)\.nii\.gz$")
 
         for archivo in archivos_nii:
             m = pattern.match(archivo)
             if not m:
                 archivos_unicos.append(archivo)
                 continue
-            grupo = m.group(1)
-            numero = int(m.group(2))
+            grupo = m.group(2)
+            numero = int(m.group(1))
             key = f"{nombre_voluntario}_{grupo}"
             grupos.setdefault(key, []).append((archivo, numero))
 
@@ -113,8 +116,8 @@ def concatenar_niftis_en_grupos(carpeta_salida_base):
                 archivos_unicos.extend([x[0] for x in lista_archivos])
                 continue
 
-            # Filter only files containing "TRA" in the name
-            lista_archivos_tra = [x for x in lista_archivos if "TRA" in x[0]]
+            # Filter only files containing "tra" in the name
+            lista_archivos_tra = [x for x in lista_archivos if "tra" in x[0]]
 
             if len(lista_archivos_tra) < 2:
                 archivos_unicos.extend([x[0] for x in lista_archivos_tra])
@@ -131,6 +134,10 @@ def concatenar_niftis_en_grupos(carpeta_salida_base):
             # Load and prepare data
             imgs = [nib.load(archivo) for archivo in archivos_ordenados]
             datos = [img.get_fdata() for img in imgs]
+            # Apply n4 bias correction before concatinating
+            if apply_bias_correction:
+                datos = [apply_bias_correction(data, (3,8,8)) for data in datos]
+            # Get the affine matrices
             afines = [img.affine for img in imgs]
 
             # Reverse order so the image with the lowest number is on top
@@ -146,7 +153,7 @@ def concatenar_niftis_en_grupos(carpeta_salida_base):
             print(f"Concatenated shape: {concatenado.shape}")
 
             nifti_concat = nib.Nifti1Image(concatenado, afines[0])
-            output_file = os.path.join(ruta_voluntario, f"{nombre_grupo}_concatenated.nii.gz")
+            output_file = os.path.join(ruta_voluntario, f"_dixon_{nombre_grupo}_concatenated.nii.gz")
             nib.save(nifti_concat, output_file)
             print(f"✅ Concatenated saved: {output_file}")
 
@@ -156,9 +163,9 @@ def concatenar_niftis_en_grupos(carpeta_salida_base):
                 print(f"  {archivo}")
 
 # Script entry point
-convertir_todos_los_voluntarios(
-    dicomDataPath,
-    niftiOtuputPath)
+#convertir_todos_los_voluntarios(
+#    dicomDataPath,
+#    niftiOtuputPath)
 
 # Group-wise concatenation
-concatenar_niftis_en_grupos(niftiOtuputPath)
+concatenar_niftis_en_grupos(niftiOtuputPath, False)
