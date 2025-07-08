@@ -11,9 +11,12 @@ from nibabel.orientations import aff2axcodes
 import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), "../utils"))
 from utils import apply_bias_correction
+import SimpleITK as sitk
 
 dicomDataPath = "/home/martin/data_imaging/Muscle/data_sarcopenia_tx/dicom_test/"
 niftiOtuputPath = "/home/martin/data_imaging/Muscle/data_sarcopenia_tx/nifti_output/"
+#dicomDataPath = "/data/MuscleSegmentation/Data/Gluteus&Lumbar/dicom"
+#niftiOtuputPath = "/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifty_output"
 
 if not os.path.exists(niftiOtuputPath):
     os.makedirs(niftiOtuputPath, exist_ok=True)
@@ -144,16 +147,16 @@ def concatenar_niftis_en_grupos(carpeta_salida_base, apply_bias_correction=False
             datos = datos[::-1]
 
             # Check that all affines are similar
-            if not all(np.allclose(afines[0], af, atol=1e-5) for af in afines):
-                print(f"⚠️ Different affines in group {nombre_grupo}, skipping")
-                continue
+            #if not all(np.allclose(afines[0], af, atol=1e-5) for af in afines):
+            #    print(f"⚠️ Different affines in group {nombre_grupo}, skipping")
+            #    continue
 
             # Concatenate volumes
             concatenado = np.concatenate(datos, axis=2)
             print(f"Concatenated shape: {concatenado.shape}")
 
             nifti_concat = nib.Nifti1Image(concatenado, afines[0])
-            output_file = os.path.join(ruta_voluntario, f"_dixon_{nombre_grupo}_concatenated.nii.gz")
+            output_file = os.path.join(ruta_voluntario, f"{nombre_grupo}_dixon_concatenated.nii.gz")
             nib.save(nifti_concat, output_file)
             print(f"✅ Concatenated saved: {output_file}")
 
@@ -162,10 +165,47 @@ def concatenar_niftis_en_grupos(carpeta_salida_base, apply_bias_correction=False
             for archivo in archivos_unicos:
                 print(f"  {archivo}")
 
-# Script entry point
-#convertir_todos_los_voluntarios(
-#    dicomDataPath,
-#    niftiOtuputPath)
+def calcular_fat_fraction_voluntarios(carpeta_salida_base, extensionImages=".nii.gz"):
+
+    print("\n=== Calculating Fat Fraction (FF) for each volunteer ===")
+
+    for nombre_voluntario in sorted(os.listdir(carpeta_salida_base)):
+        ruta_voluntario = os.path.join(carpeta_salida_base, nombre_voluntario)
+        if not os.path.isdir(ruta_voluntario):
+            continue
+
+        fat_file = os.path.join(ruta_voluntario, f"{nombre_voluntario}_f_dixon_concatenated{extensionImages}")
+        water_file = os.path.join(ruta_voluntario, f"{nombre_voluntario}_w_dixon_concatenated{extensionImages}")
+
+        if os.path.exists(fat_file) and os.path.exists(water_file):
+            print(f"\n🧠 Calculating FF for {nombre_voluntario}")
+
+            fatImage = sitk.Cast(sitk.ReadImage(fat_file), sitk.sitkFloat32)
+            waterImage = sitk.Cast(sitk.ReadImage(water_file), sitk.sitkFloat32)
+
+            # Calculate FF and apply mask
+            waterfatImage = sitk.Add(fatImage, waterImage)
+            fatfractionImage = sitk.Divide(fatImage, waterfatImage)
+            fatfractionImage = sitk.Cast(
+                sitk.Mask(fatfractionImage, waterfatImage > 0, outsideValue=0, maskingValue=0),
+                sitk.sitkFloat32)
+
+            # Save FF image
+            output_filename = os.path.join(ruta_voluntario, f"{nombre_voluntario}_ff{extensionImages}")
+            sitk.WriteImage(fatfractionImage, output_filename, True)
+            print(f"✅ FF Image saved: {output_filename}")
+
+        else:
+            print(f"⚠️ Missing F and/or W concatenated images for {nombre_voluntario}.")
+
+#################### Script entry point ##################################################
+
+    # Data conversion to nifty
+convertir_todos_los_voluntarios(dicomDataPath,niftiOtuputPath)
 
 # Group-wise concatenation
 concatenar_niftis_en_grupos(niftiOtuputPath, False)
+
+# Fat Fraction calculation
+calcular_fat_fraction_voluntarios(niftiOtuputPath)
+
