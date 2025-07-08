@@ -23,7 +23,7 @@ if not os.path.exists(niftiOtuputPath):
 
 print("Script started")
 
-def cargar_slices_dicom(dicom_folder):      
+def cargar_slices_dicom(dicom_folder):
     print("def cargar_slices_dicom(dicom_folder)")
     slices = []
     for filename in sorted(os.listdir(dicom_folder)):
@@ -164,6 +164,7 @@ def concatenar_niftis_en_grupos(carpeta_salida_base, apply_bias_correction=False
             print(f"🟨 Unique (not concatenated) files in {nombre_voluntario}:")
             for archivo in archivos_unicos:
                 print(f"  {archivo}")
+
 
 def calcular_fat_fraction_voluntarios(carpeta_salida_base, extensionImages=".nii.gz"):
 
