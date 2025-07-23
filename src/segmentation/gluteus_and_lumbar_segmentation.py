@@ -129,7 +129,6 @@ for idx, row in coords_df.iterrows():
     # --------------------------- CROP LUMBAR REGION ---------------------------
     crop_start_lumbar = trochanter
     crop_end_lumbar = vertebra_L1
-    original_z = image.shape[0]
     lower_crop_lumbar = [0, 0, crop_start_lumbar]
     upper_crop_lumbar = [0, 0, original_z - crop_end_lumbar]
     lumbar_image = sitk.Crop(sitk_image, lower_crop_lumbar, upper_crop_lumbar)
