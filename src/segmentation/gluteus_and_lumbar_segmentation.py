@@ -50,7 +50,11 @@ lumbar_model.eval()
 
 print("Models loaded.\n")
 
+<<<<<<< HEAD
 # --------------------------- CROP AND REGISTER EACH VOLUNTEER ---------------------------
+=======
+# --------------------------- PROCESS EACH VOLUNTEER ---------------------------
+>>>>>>> 55444b84a2083ffdef5df52396af6fb9f5560e1c
 for idx, row in coords_df.iterrows():
     volunteer_id = row['ID']
     outputPathThisSubject = os.path.join(output_root, volunteer_id )
@@ -65,16 +69,16 @@ for idx, row in coords_df.iterrows():
     input_file = os.path.join(input_folder, f"{volunteer_id}_in_dixon_concatenated.nii.gz")
     sitk_image = sitk.ReadImage(input_file)
     image = sitk.GetArrayFromImage(sitk_image).astype(np.float32)
-    pelvis_image = image[:,:, int(trochanter):int(iliac_crest)]
-    print(f"Original image shape: {image.shape}")  # shape: [Z, Y, X]
 
     # --------------------------- CROP PELVIS REGION ---------------------------
     original_z = image.shape[0]
     crop_start = trochanter
     crop_end = iliac_crest
-    lower_crop = [0, 0, crop_start]  # [X, Y, Z]
-    upper_crop = [0, 0, original_z - crop_end]  # [X, Y, Z]
-    pelvis_image = sitk.Crop(sitk_image, lower_crop, upper_crop)
+    pelvis_image = image[:,:, int(trochanter):int(iliac_crest)]
+    print(f"Original image shape: {image.shape}")  # shape: [Z, Y, X]
+    #lower_crop = [0, 0, crop_start]  # [X, Y, Z]
+    #upper_crop = [0, 0, original_z - crop_end]  # [X, Y, Z]
+    #pelvis_image = sitk.Crop(sitk_image, lower_crop, upper_crop)
     sitk.WriteImage(pelvis_image, f"{input_folder}/pelvis_crop_debug.nii.gz")
 
     print(f"\nCropped gluteus region:")
@@ -92,25 +96,21 @@ for idx, row in coords_df.iterrows():
     rigid_map['AutomaticTransformInitialization'] = ['true']
     rigid_map['AutomaticTransformInitializationMethod'] = ['CenterOfGravity']
     parameterMapVector.append(rigid_map)
-
     elastixImageFilter = sitk.ElastixImageFilter()
     elastixImageFilter.SetFixedImage(reference_image_gluteus)
     elastixImageFilter.SetMovingImage(pelvis_image)
     elastixImageFilter.SetParameterMap(parameterMapVector)
     elastixImageFilter.SetLogToConsole(False)
-
     try:
         elastixImageFilter.Execute()
         registered_image = elastixImageFilter.GetResultImage()
         sitk.WriteImage(registered_image, os.path.join(input_folder, "gluteus_registered.nii.gz"))
-        elastixImageFilter.WriteParameterFile(elastixImageFilter.GetParameterMap()[0],
-                                              os.path.join(input_folder, "transform_gluteus.txt"))
+        elastixImageFilter.WriteParameterFile(elastixImageFilter.GetParameterMap()[0],os.path.join(input_folder, "transform_gluteus.txt"))
         print("Registración completada y guardada.")
     except RuntimeError as e:
         print("Error en la registración:", str(e))
 
     # --------------------------- SEGMENT PELVIS WITH TRAINED UNET ---------------------------
-
     print("\n⏳ Segmentando glúteos con UNet...")
 
     image = sitk.GetArrayFromImage(registered_image).astype(np.float32)  # [Z,Y,X]
@@ -157,13 +157,11 @@ for idx, row in coords_df.iterrows():
     rigid_map_lumbar['AutomaticTransformInitialization'] = ['true']
     rigid_map_lumbar['AutomaticTransformInitializationMethod'] = ['CenterOfGravity']
     parameterMapVector_lumbar.append(rigid_map_lumbar)
-
     elastixImageFilter_lumbar = sitk.ElastixImageFilter()
     elastixImageFilter_lumbar.SetFixedImage(reference_image_lumbar)
     elastixImageFilter_lumbar.SetMovingImage(lumbar_image)
     elastixImageFilter_lumbar.SetParameterMap(parameterMapVector_lumbar)
     elastixImageFilter_lumbar.SetLogToConsole(False)
-
     try:
         elastixImageFilter_lumbar.Execute()
         registered_lumbar = elastixImageFilter_lumbar.GetResultImage()
