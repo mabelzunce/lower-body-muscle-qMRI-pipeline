@@ -4,22 +4,26 @@ import pandas as pd
 import SimpleITK as sitk
 import torch
 torch.cuda.empty_cache()
-from sympy import false
+#from sympy import false
 from unet_3d import Unet
 import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from utils.utils import multilabel, maxProb, apply_bias_correction, FilterUnconnectedRegions
 
 # --------------------------- CONFIG PATHS ---------------------------
-input_root = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifty_output/'
-output_root = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/segmentations/'
+input_root = '/home/martin/data_imaging/Muscle/data_sarcopenia_tx//nifti_output/'
+output_root = '/home/martin/data_imaging/Muscle/data_sarcopenia_tx//segmentations/'
+output_pelvis_path = '/home/martin/data_imaging/Muscle/data_sarcopenia_tx//nifti_pelvis/'
 os.makedirs(output_root, exist_ok=True)
-coord_csv = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/slices_cortes_anatomicos.csv'
-reference_path_gluteus = '/home/german/lower-body-muscle-qMRI-pipeline/data/reference_images/gluteus_reference.nii.gz'
-reference_path_lumbar = '/home/german/lower-body-muscle-qMRI-pipeline/data/reference_images/lumbar_spine_reference.nii.gz'
-gluteus_model_path = '/home/german/lower-body-muscle-qMRI-pipeline/models/gluteus_model.pt'
-lumbar_model_path = '/home/german/lower-body-muscle-qMRI-pipeline/models/lumbar_model.pt'
+os.makedirs(output_pelvis_path, exist_ok=True)
+coord_csv = '/home/martin/data_imaging/Muscle/data_sarcopenia_tx/slices_cortes_anatomicos.csv'
+reference_path_gluteus = '/home/martin/data_imaging/Muscle/GlutealSegmentations/PelvisFOV/ManualSegmentations/MhdRegisteredDownsampled/ID00002.mhd'
+reference_path_lumbar = '../../data/reference_images/lumbar_spine_reference.nii.gz'
+gluteus_model_path = '/home/martin/data/UNSAM/Muscle/repoMuscleSegmentation/Data/GlutesPelvis3D/model/unet_20250807_110716_123_best_fit.pt'
+lumbar_model_path = '../../models/lumbar_model.pt'
 
+dixon_types = ['in', 'opp', 'f', 'w']
+dixon_output_tag = ['I', 'O', 'F', 'W']
 # --------------------------- LOAD COORDINATES AND IMAGES---------------------------
 coords_df = pd.read_csv(coord_csv)
 reference_image_gluteus = sitk.ReadImage(reference_path_gluteus)
@@ -50,11 +54,7 @@ lumbar_model.eval()
 
 print("Models loaded.\n")
 
-<<<<<<< HEAD
-# --------------------------- CROP AND REGISTER EACH VOLUNTEER ---------------------------
-=======
 # --------------------------- PROCESS EACH VOLUNTEER ---------------------------
->>>>>>> 55444b84a2083ffdef5df52396af6fb9f5560e1c
 for idx, row in coords_df.iterrows():
     volunteer_id = row['ID']
     outputPathThisSubject = os.path.join(output_root, volunteer_id )
@@ -66,27 +66,30 @@ for idx, row in coords_df.iterrows():
 
     # --------------------------- LOAD IMAGE ---------------------------
     input_folder = os.path.join(input_root, volunteer_id)
-    input_file = os.path.join(input_folder, f"{volunteer_id}_in_dixon_concatenated.nii.gz")
-    sitk_image = sitk.ReadImage(input_file)
-    image = sitk.GetArrayFromImage(sitk_image).astype(np.float32)
+    output_pelvis_this_volunteer_path = os.path.join(output_pelvis_path, volunteer_id)
+    os.makedirs(os.path.join(output_pelvis_path, volunteer_id), exist_ok=True)
+    images_dixon = {}
+    for dixon_tag in dixon_types:
+        input_file_tag = os.path.join(input_folder, f"{volunteer_id}_{dixon_tag}_dixon_concatenated.nii.gz")
+        if os.path.exists(input_file_tag):
+            images_dixon[dixon_tag] = sitk.ReadImage(input_file_tag)
+        else:
+            print(f"Warning: {input_file_tag} not found.")
 
-    # --------------------------- CROP PELVIS REGION ---------------------------
-    original_z = image.shape[0]
-    crop_start = trochanter
-    crop_end = iliac_crest
-    pelvis_image = image[:,:, int(trochanter):int(iliac_crest)]
-    print(f"Original image shape: {image.shape}")  # shape: [Z, Y, X]
-    #lower_crop = [0, 0, crop_start]  # [X, Y, Z]
-    #upper_crop = [0, 0, original_z - crop_end]  # [X, Y, Z]
-    #pelvis_image = sitk.Crop(sitk_image, lower_crop, upper_crop)
-    sitk.WriteImage(pelvis_image, f"{input_folder}/pelvis_crop_debug.nii.gz")
+        # --------------------------- CROP PELVIS REGION ---------------------------
+        #original_z = image.shape[0]
+        crop_start = trochanter
+        crop_end = iliac_crest
+        sitk_pelvis_image = images_dixon[dixon_tag][:,:, int(trochanter):int(iliac_crest)]
+        dixon_index = dixon_types.index(dixon_tag)
+        sitk.WriteImage(sitk_pelvis_image, f"{output_pelvis_this_volunteer_path}/{volunteer_id}_{dixon_output_tag[dixon_index]}.nii.gz")
 
-    print(f"\nCropped gluteus region:")
-    print(f"  Z range: {crop_start} to {crop_end} → slices kept: {crop_end - crop_start}")
-    print("  Shape:", sitk.GetArrayFromImage(pelvis_image).shape)
-    print("  Spacing:   ", pelvis_image.GetSpacing())
-    print("  Origin:    ", pelvis_image.GetOrigin())
-    print("  Direction: ", pelvis_image.GetDirection())
+        print(f"\nCropped gluteus region:")
+        print(f"  Z range: {crop_start} to {crop_end} → slices kept: {crop_end - crop_start}")
+        print("  Dimensions:   ", sitk_pelvis_image.GetDimension())
+        print("  Spacing:   ", sitk_pelvis_image.GetSpacing())
+        print("  Origin:    ", sitk_pelvis_image.GetOrigin())
+        print("  Direction: ", sitk_pelvis_image.GetDirection())
 
     # --------------------------- FAT FRACTION PELVIS ---------------------------
 
@@ -98,7 +101,7 @@ for idx, row in coords_df.iterrows():
     parameterMapVector.append(rigid_map)
     elastixImageFilter = sitk.ElastixImageFilter()
     elastixImageFilter.SetFixedImage(reference_image_gluteus)
-    elastixImageFilter.SetMovingImage(pelvis_image)
+    elastixImageFilter.SetMovingImage(images_dixon[0]) # in phase
     elastixImageFilter.SetParameterMap(parameterMapVector)
     elastixImageFilter.SetLogToConsole(False)
     try:

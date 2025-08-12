@@ -10,10 +10,14 @@ import dicom2nifti
 from nibabel.orientations import aff2axcodes
 import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), "../utils"))
-from utils import apply_bias_correction
+from utils import apply_bias_correction_2
 import SimpleITK as sitk
-
-dicomDataPath = "/home/martin/data_imaging/Muscle/data_sarcopenia_tx/dicom_test/"
+# Configuration
+convert_dicom = False  # Set to False if you want to skip DICOM conversion
+concatenate_niftis = True  # Set to False if you want to skip concatenation
+calculate_fat_fraction = True  # Set to False if you want to skip FF calculation
+# Datapath
+dicomDataPath = "/home/martin/data_imaging/Muscle/data_sarcopenia_tx/dicom/"
 niftiOtuputPath = "/home/martin/data_imaging/Muscle/data_sarcopenia_tx/nifti_output/"
 #dicomDataPath = "/data/MuscleSegmentation/Data/Gluteus&Lumbar/dicom"
 #niftiOtuputPath = "/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifty_output"
@@ -102,7 +106,7 @@ def concatenar_niftis_en_grupos(carpeta_salida_base, apply_bias_correction=False
         grupos = {}
         archivos_unicos = []
 
-        pattern = re.compile(r"^(\d+).*_(f|in|opp|w)\.nii\.gz$")
+        pattern = re.compile(r"^(\d+)(?!.*_nd).*_(f|in|opp|w)\.nii\.gz$")
 
         for archivo in archivos_nii:
             m = pattern.match(archivo)
@@ -137,9 +141,14 @@ def concatenar_niftis_en_grupos(carpeta_salida_base, apply_bias_correction=False
             # Load and prepare data
             imgs = [nib.load(archivo) for archivo in archivos_ordenados]
             datos = [img.get_fdata() for img in imgs]
+            for i, data in enumerate(datos):
+                mean_value = np.mean(data)
+                max_value = np.max(data)
+                print(f"   - Max value of {os.path.basename(archivos_ordenados[i])}: {max_value:.4f}")
+                print(f"   - Mean value of {os.path.basename(archivos_ordenados[i])}: {mean_value:.4f}")
             # Apply n4 bias correction before concatinating
             if apply_bias_correction:
-                datos = [apply_bias_correction(data, (3,8,8)) for data in datos]
+                datos = [apply_bias_correction_2(data, (3,8,8)) for data in datos]
             # Get the affine matrices
             afines = [img.affine for img in imgs]
 
@@ -201,12 +210,15 @@ def calcular_fat_fraction_voluntarios(carpeta_salida_base, extensionImages=".nii
 
 #################### Script entry point ##################################################
 
-    # Data conversion to nifty
-convertir_todos_los_voluntarios(dicomDataPath,niftiOtuputPath)
+# Data conversion to nifty
+if convert_dicom:
+    convertir_todos_los_voluntarios(dicomDataPath,niftiOtuputPath)
 
 # Group-wise concatenation
-concatenar_niftis_en_grupos(niftiOtuputPath, False)
+if concatenate_niftis:
+    concatenar_niftis_en_grupos(niftiOtuputPath, False)
 
 # Fat Fraction calculation
-calcular_fat_fraction_voluntarios(niftiOtuputPath)
+if calculate_fat_fraction:
+    calcular_fat_fraction_voluntarios(niftiOtuputPath)
 
