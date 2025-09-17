@@ -8,6 +8,7 @@ from unet_3d import Unet
 sys.path.append(os.path.join(os.path.dirname(__file__), "../utils"))
 from utils import apply_bias_correction, multilabel, maxProb, FilterUnconnectedRegions
 
+torch.cuda.empty_cache()
 dixon_types = ['in', 'opp', 'f', 'w']
 dixon_output_tag = ['I', 'O', 'F', 'W']
 
@@ -57,6 +58,47 @@ def ApplyBiasCorrection(inputImage, shrinkFactor = (1,1,1)):
         output = biasFieldCorrFilter.Execute(inputImage)
     # return the output:
     return output
+
+#VOLUMES TO .CSV
+def write_volumes_to_csv(output_csv_path, volumes, subject_name):
+
+    file_exists = os.path.isfile(output_csv_path)
+    with open(output_csv_path, mode='a', newline='') as csv_file:
+        writer = csv.writer(csv_file)
+        #if not file_exists:
+            # Write headers if the file is new
+            #headers = ['Subject'] + [f'Vol {label}' for label in sorted(volumes.keys())]
+            #writer.writerow(headers)
+        # Write info in a row (1st element: subject name, then: all the labels)
+        row = [subject_name] + [volumes[label] for label in sorted(volumes.keys())]
+        writer.writerow(row)
+
+#FFS TO .CSV
+def write_ff_to_csv(output_csv_path, ffs, subject_name):
+
+    file_exists = os.path.isfile(output_csv_path)
+    with open(output_csv_path, mode='a', newline='') as csv_file:
+        writer = csv.writer(csv_file)
+        #if not file_exists:
+            # Write headers if the file is new
+            #headers = ['Subject'] + [f'FF {label}' for label in sorted(ffs.keys())]
+            #writer.writerow(headers)
+        # Write info in a row (1st element: subject name, then: all the labels)
+        row = [subject_name] + [ffs[label] for label in sorted(ffs.keys())]
+        writer.writerow(row)
+
+def write_vol_ff_to_csv(output_csv_path, volumes, ffs, subject_name):
+
+    file_exists = os.path.isfile(output_csv_path)
+    with open(output_csv_path, mode='a', newline='') as csv_file:
+        writer = csv.writer(csv_file)
+        #if not file_exists:
+            # Write headers if the file is new
+            #headers = ['Subject'] + [f'FF {label}' for label in sorted(ffs.keys())]
+            #writer.writerow(headers)
+        # Write info in a row (1st element: subject name, then: all the labels)
+        row = [subject_name] + [volumes[label] for label in sorted(volumes.keys())] + [ffs[label] for label in sorted(ffs.keys())]
+        writer.writerow(row)
 
 #BINARY SEGMENTATIONS:
 # Function to load, binarize and save segmentations
@@ -140,6 +182,112 @@ def apply_mask_and_calculate_ff(folder):
 
     return ff_results
 
+#SAVE TOTAL VOLUME AND FF ON THE SAME .CSV FILE
+def save_results_to_csv(volume_results, ff_results, output_csv):
+    with open(output_csv, mode='w', newline='') as file:
+        writer = csv.writer(file)
+        # Header
+        #writer.writerow(["Sujeto", "Volumen (mm^3)", "FF Promedio"])
+
+        for key in volume_results:
+            volume = volume_results.get(key, "N/A")
+            ff = ff_results.get(key, "N/A")
+            writer.writerow([key, volume, ff])
+
+    print(f"Information saved in: {output_csv}")
+
+def subject_csv(name, all_volumes, all_ffs, total_vol, mean_ff, subject_path):
+
+    # Validar que la carpeta exista
+    if not os.path.exists(subject_path):
+        print(f"Error: La carpeta {subject_path} no existe.")
+        return
+
+    # Crear la ruta del archivo CSV
+    csv_file = os.path.join(subject_path, f"{name}.csv")
+
+    # Preparar los datos
+    row = [name] + list(all_volumes.values()) + list(all_ffs.values()) + [total_vol, mean_ff]
+
+    # Escribir el archivo CSV
+    try:
+        with open(csv_file, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(row)
+        print(f"Archivo CSV generado exitosamente en {subject_path}")
+    except Exception as e:
+        print(f"Error al generar el archivo CSV: {e}")
+
+def all_subjects_csv(names, list_all_volumes, list_all_ffs, list_total_vol, list_mean_ff, general_path):
+    # Validar que las listas tengan la misma longitud
+    if not all(len(lista) == len(names) for lista in [list_all_volumes, list_all_ffs, list_total_vol, list_mean_ff]):
+        print("Error: Todas las listas deben tener la misma longitud.")
+        return
+
+    # Determinar el máximo número de columnas requerido para los vectores
+    max_volumenes = max(len(vol) for vol in list_all_volumes)
+    max_ffs = max(len(ff) for ff in list_all_ffs)
+
+    # Preparar las filas
+    rows = []
+    for i in range(len(names)):
+        row = [names[i]]
+        # Agregar volúmenes y rellenar con ceros si faltan valores
+        row += list(list_all_volumes[i].values()) + [0] * (max_volumenes - len(list_all_volumes[i]))
+        # Agregar FFs y rellenar con ceros si faltan valores
+        row += list(list_all_ffs[i].values()) + [0] * (max_ffs - len(list_all_ffs[i]))
+        # Agregar vol_total y ff_medio
+        row += [list_total_vol[i], list_mean_ff[i]]
+        rows.append(row)
+
+    # Escribir el archivo CSV
+    try:
+        with open(general_path, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerows(rows)  # Escribir las filas
+        print(f"CSV succesfully created in {general_path}")
+    except Exception as e:
+        print(f"Failure to create the csv file: {e}")
+
+
+def create_mri_segmentation_gif(mri, segmentation, output_path, colormap='tab10'):
+    """
+    Creates an animated GIF overlaying segmentation masks on MRI slices.
+
+    Parameters:
+        mri (numpy.ndarray): 3D array of MRI data.
+        segmentation (numpy.ndarray): 3D array of segmentation labels (same size as mri).
+        output_path (str): Path to save the output GIF.
+        colormap (str): Matplotlib colormap for the segmentation labels.
+    """
+    # Check input dimensions
+    assert mri.shape == segmentation.shape, "MRI and segmentation must have the same shape."
+
+    # Normalize MRI for better visualization
+    #mri_normalized = (mri - np.min(mri)) / (np.max(mri) - np.min(mri))
+    mri_normalized = mri / np.max(mri)
+
+    # Create a colormap
+    cmap = plt.get_cmap(colormap)
+
+    # Collect frames for the GIF
+    frames = []
+    for i in range(mri.shape[2]):
+        fig, ax = plt.subplots(figsize=(6, 6))
+        ax.imshow(mri_normalized[:, :, i], cmap='gray', interpolation='none')
+        ax.imshow(segmentation[:, :, i], cmap=cmap, alpha=0.4, interpolation='none')
+        ax.axis('off')
+
+        # Save the frame to a temporary buffer
+        fig.canvas.draw()
+        frame = np.frombuffer(fig.canvas.tostring_rgb(), dtype='uint8')
+        frame = frame.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+        frames.append(frame)
+        plt.close(fig)
+
+    # Write frames to an animated GIF
+    imageio.mimsave(output_path, frames, duration=0.1)  # duration = time per frame in seconds
+    print(f"GIF saved to {output_path}")
 
 def create_segmentation_overlay_animated_gif(sitkImage, sitkLabels, output_path):
     frames = []
@@ -190,8 +338,26 @@ def load_segmentations_mhd(folder):
     return segmentations
 
 
+# Crear GIFs
+def create_gifs(segmentations, output_folder):
+    for key, segmentation in segmentations.items():
+        frames = []
+        for i in range(segmentation.shape[0]):  # Recorrer el eje de profundidad (Depth)
+            frame = segmentation[i]
+            # Escalar los valores al rango [0, 255] para convertir en imagen
+            normalized = (frame - np.min(frame)) / (np.max(frame) - np.min(frame)) * 255
+            img = Image.fromarray(normalized.astype('uint8'))
+            frames.append(img)
+
+        # Guardar como GIF
+        output_path = os.path.join(output_folder, f"{key}_animation.gif")
+        imageio.mimsave(output_path, frames, fps=5)  # Ajustar `fps` según la velocidad deseada
+        print(f"GIF guardado en: {output_path}")
+
 #FUNCIONES PARA IMAGENES DE TEJIDOS Y DE GRASA SUBCUTANEA:
 #FUNCION BODY MASK DESDE INPHASE
+# Function that creates a mask for the body from an in-phase dixon image. It uses an Otsu thresholding and morphological operations
+# to create a mask where the background is 0 and the body is 1. Can be used for masking image registration.
 def GetBodyMaskFromInPhaseDixon(inPhaseImage, vectorRadius = (2,2,2)):
     kernel = sitk.sitkBall
     otsuImage = sitk.OtsuMultipleThresholds(inPhaseImage, 4, 0, 128, # 4 classes and 128 bins
@@ -209,6 +375,9 @@ def GetBodyMaskFromInPhaseDixon(inPhaseImage, vectorRadius = (2,2,2)):
 
 
 #FUNCION BODY MASK DESDE FAT
+# Function that creates a mask for the body from an fat dixon image. It uses an Otsu thresholding and morphological operations
+# to create a mask where the background is 0 and the body is 1. Can be used for masking image registration. Assumes that skin fat
+# surround the patient body.
 def GetBodyMaskFromFatDixonImage(fatImage, vectorRadius = (2,2,2), minObjectSizeInSkin = 500):
     kernel = sitk.sitkBall
     otsuImage = sitk.OtsuMultipleThresholds(fatImage, 1, 0, 128, # 1 classes and 128 bins
@@ -406,29 +575,21 @@ def load_tissue_segmentations(folder):
     print(f"Total de archivos encontrados: {len(segmentations)}")
     return segmentations
 
+# Crear GIFs
+def create_gifs(segmentations, output_folder):
+    for key, segmentation in segmentations.items():
+        frames = []
+        for i in range(segmentation.shape[0]):  # Recorrer el eje de profundidad (Depth)
+            frame = segmentation[i]
+            # Escalar los valores al rango [0, 255] para convertir en imagen
+            normalized = (frame - np.min(frame)) / (np.max(frame) - np.min(frame)) * 255
+            img = Image.fromarray(normalized.astype('uint8'))
+            frames.append(img)
 
-def write_vol_ff_simple_csv(output_csv_path, volumes, ffs, subject_name):
-    """
-    Guarda en un CSV los volúmenes y FFs por etiqueta.
-    - output_csv_path: ruta al archivo CSV de salida
-    - volumes: diccionario {label: volumen}
-    - ffs: diccionario {label: FF}
-    - subject_name: nombre del sujeto
-    """
-    file_exists = os.path.isfile(output_csv_path)
-    with open(output_csv_path, mode='a', newline='') as csv_file:
-        writer = csv.writer(csv_file)
-        # Escribir cabecera si el archivo es nuevo
-        if not file_exists:
-            headers = (["Subject"] +
-                       [f"Vol {l}" for l in sorted(volumes.keys())] +
-                       [f"FF {l}" for l in sorted(ffs.keys())])
-            writer.writerow(headers)
-
-        row = [subject_name] + \
-              [volumes[l] for l in sorted(volumes.keys())] + \
-              [ffs[l] for l in sorted(ffs.keys())]
-        writer.writerow(row)
+        # Guardar como GIF
+        output_path = os.path.join(output_folder, f"{key}_animationTS.gif")
+        imageio.mimsave(output_path, frames, fps=5)  # Ajustar `fps` según la velocidad deseada
+        print(f"GIF guardado en: {output_path}")
 
 # --------------------------- CONFIG PATHS  ---------------------------
 input_root = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifty_output/'
@@ -486,13 +647,64 @@ paramFileAffine = 'Parameters_Affine_' + similarityMetricForReg
 extensionShortcuts = 'lnk'
 strForShortcut = '-> '
 extensionImages = '.mhd' #'.nii.gz'
-tagInPhase = '_I'
-
+tagInPhase = '_I'#
 # outOfPhaseSuffix
 waterSuffix = '_W'
 fatSuffix = '_F'
 tagAutLabels = '_aut'
 tagManLabels = '_labels'
+
+# OUTPUT PATHS:
+if not os.path.exists(outputPath):
+    os.makedirs(outputPath)
+
+vol_csv_name = 'volumes.csv'
+ff_csv_name = 'ffs.csv'
+all_csv_name = 'all_volumes_and_ffs.csv'
+vol_and_ff_name = 'volumes_and_ffs.csv'
+totalvol_and_meanff_name = 'TotalVol_MeanFF.csv'
+
+# ---- nombres globales  ----
+vol_lumbar_all      = 'volumes_lumbar_all.csv'
+ff_lumbar_all       = 'ffs_lumbar_all.csv'
+volff_lumbar_all    = 'volumes_and_ffs_lumbar.csv'
+
+vol_pelvis_all      = 'volumes_pelvis_all.csv'
+ff_pelvis_all       = 'ffs_pelvis_all.csv'
+volff_pelvis_all    = 'volumes_and_ffs_pelvis.csv'
+
+#Clear the .csv files if they've got information
+file_path_v = os.path.join(outputPath, vol_csv_name)
+if os.path.exists(file_path_v):
+    with open(file_path_v, 'w') as file:
+        pass  # Clear
+
+for fname in [vol_lumbar_all, ff_lumbar_all, volff_lumbar_all,
+              vol_pelvis_all, ff_pelvis_all, volff_pelvis_all]:
+    fpath = os.path.join(outputPath, fname)
+    if os.path.exists(fpath):
+        open(fpath, 'w').close()
+
+file_path_ff = os.path.join(outputPath, ff_csv_name)
+if os.path.exists(file_path_ff):
+    with open(file_path_ff, 'w') as file:
+        pass  # Clear
+
+file_path_vol_ff = os.path.join(outputPath, vol_and_ff_name)
+if os.path.exists(file_path_vol_ff):
+    with open(file_path_vol_ff, 'w') as file:
+        pass  # Clear
+
+general_path = os.path.join(outputPath, all_csv_name)
+if os.path.exists(general_path):
+    with open(general_path, 'w') as file:
+        pass  # Clear
+
+# CSV THAT CONTAINS TOTAL VOLUME AND MEAN FF PATH
+TotalVol_MeanFF_csv = os.path.join(outputPath, totalvol_and_meanff_name)
+if os.path.exists(TotalVol_MeanFF_csv):
+    with open(TotalVol_MeanFF_csv, 'w') as file:
+        pass  # Clear
 
 #CHECK DEVICE:
 device = torch.device(device_to_use) #'cuda' uses the graphic board
@@ -513,27 +725,40 @@ referenceImage_gluteus = sitk.ReadImage(gluteus_reference_path)
 # MODEL INIT:
 multilabelNum = 8
 torch.cuda.empty_cache()
-lumbarModel = Unet(1, multilabelNum).to(device)
-lumbarModel.load_state_dict(torch.load(lumbar_model_path, map_location=device))
-glutealModel = Unet(1, multilabelNum).to(device)
-glutealModel.load_state_dict(torch.load(gluteal_model_path, map_location=device))
+model = Unet(1, multilabelNum)
+model.load_state_dict(torch.load(lumbar_model_path, map_location=device))
+lumbarModel = model.to(device)
 
+#READ DATA AND PRE PROCESS IT FOR TRAINING DATA SETS:
 # Parameters for image registration:
 parameterMapVector = sitk.VectorOfParameterMap()
 parameterMapVector.append(sitk.ElastixImageFilter().ReadParameterFile(parameterFilesPath + paramFileRigid + '.txt'))
-print('Lumbar reference voxel size:', referenceImage_lumbar.GetSize())
-print('Gluteus reference voxel size:', referenceImage_gluteus.GetSize())
+print('Reference image voxel size: {0}'.format(referenceImage_lumbar.GetSize()))
+
+# MODEL INIT:
+multilabelNum = 8
+torch.cuda.empty_cache()
+model = Unet(1, multilabelNum)
+model.load_state_dict(torch.load(gluteal_model_path, map_location=device))
+glutealModel = model.to(device)
+
+#READ DATA AND PRE PROCESS IT FOR TRAINING DATA SETS:
+# Parameters for image registration:
+parameterMapVector = sitk.VectorOfParameterMap()
+parameterMapVector.append(sitk.ElastixImageFilter().ReadParameterFile(parameterFilesPath + paramFileRigid + '.txt'))
+print('Reference image voxel size: {0}'.format(referenceImage_gluteus.GetSize()))
+
 
 # --------------------------- PROCESS EACH VOLUNTEER ---------------------------
 
 #for idx, row in coords_df.iterrows():
-for idx, row in coords_df.iloc[0:2].iterrows():
+for idx, row in coords_df.iloc[0:5].iterrows():
     inPhaseImageLumbar, fatImageLumbar, waterImageLumbar = None, None, None
     inPhaseImagePelvis, fatImagePelvis, waterImagePelvis = None, None, None
     ffLumbar, ffPelvis = None, None
     volunteer_id = row['ID']
     subject = volunteer_id
-    outputPathThisSubject = os.path.join(outputPath, volunteer_id )
+    outputPathThisSubject = os.path.join(outputPath, volunteer_id ) #antes era outputroot
     os.makedirs(outputPathThisSubject, exist_ok=True)
     trochanter = int(row['Trocánter menor'])
     iliac_crest = int(row['Cresta iliaca'])
@@ -542,6 +767,7 @@ for idx, row in coords_df.iloc[0:2].iterrows():
 
     # --------------------------- LOAD IMAGE ---------------------------
     input_folder = os.path.join(input_root, volunteer_id)
+    # Output paths for this volunteer
     output_pelvis_this_volunteer_path = os.path.join(output_pelvis_path, volunteer_id)
     output_lumbar_this_volunteer_path = os.path.join(output_lumbar_path, volunteer_id)
     os.makedirs(output_pelvis_this_volunteer_path, exist_ok=True)
@@ -560,7 +786,6 @@ for idx, row in coords_df.iloc[0:2].iterrows():
             print(f"Warning: {input_file_tag} not found.")
 
         # --------------------------- CROP PELVIS REGION ---------------------------
-
         sitk_pelvis_image = images_dixon[dixon_tag][:,:, int(trochanter):int(iliac_crest)]
         dixon_index = dixon_types.index(dixon_tag)
         sitk.WriteImage(sitk_pelvis_image, f"{output_pelvis_this_volunteer_path}/{volunteer_id}_{dixon_output_tag[dixon_index]}.nii.gz")
@@ -570,7 +795,6 @@ for idx, row in coords_df.iloc[0:2].iterrows():
             fatImagePelvis = sitk_pelvis_image
         elif dixon_tag == 'w':
             waterImagePelvis = sitk_pelvis_image
-
         # --------------------------- CROP LUMBAR REGION ---------------------------
         sitk_lumbar_image = images_dixon[dixon_tag][:,:, int(trochanter):int(vertebra_L1)]
         sitk.WriteImage(sitk_lumbar_image, f"{output_lumbar_this_volunteer_path}/{volunteer_id}_{dixon_output_tag[dixon_index]}.nii.gz")
@@ -582,12 +806,18 @@ for idx, row in coords_df.iloc[0:2].iterrows():
             waterImageLumbar = sitk_lumbar_image
         # --------------------------- END OF CROP --------------------------
 
+    # Output path for this subject:
+    outputPathThisSubject = os.path.join(outputPath, subject) #Generate the path of that subject to save his/her info
+    if not os.path.exists(outputPathThisSubject):
+        os.makedirs(outputPathThisSubject)
+
     # -------------------- FAT FRACTION CALCULATION --------------------
 
     # LUMBAR
     if (fatImageLumbar is not None) and (waterImageLumbar is not None):
         fatImageLumbar = sitk.Cast(fatImageLumbar, sitk.sitkFloat32)
         waterImageLumbar = sitk.Cast(waterImageLumbar, sitk.sitkFloat32)
+
         waterfatLumbar = sitk.Add(fatImageLumbar, waterImageLumbar)
         ffLumbar = sitk.Divide(fatImageLumbar, waterfatLumbar)
         ffLumbar = sitk.Cast(
@@ -598,10 +828,11 @@ for idx, row in coords_df.iloc[0:2].iterrows():
     else:
         print(f"[WARN] Missing W and/or F lumbar images for {subject} — skipping lumbar FF.")
 
-    # PELVIS
+    # PELVIS (GLÚTEO)
     if (fatImagePelvis is not None) and (waterImagePelvis is not None):
         fatImagePelvis = sitk.Cast(fatImagePelvis, sitk.sitkFloat32)
         waterImagePelvis = sitk.Cast(waterImagePelvis, sitk.sitkFloat32)
+
         waterfatPelvis = sitk.Add(fatImagePelvis, waterImagePelvis)
         ffPelvis = sitk.Divide(fatImagePelvis, waterfatPelvis)
         ffPelvis = sitk.Cast(
@@ -700,14 +931,21 @@ for idx, row in coords_df.iloc[0:2].iterrows():
 
     # Enforce the same space in the raw image (there was a bug before, without this they match in geometrical space but not in voxel space):
     output = sitk.Resample(output, sitkImage, sitk.Euler3DTransform(), sitk.sitkNearestNeighbor)
+
     output_single_mask = output > 0 #Binary segmentation
+
     sitk.WriteImage(output, os.path.join(outputPathThisSubject, subject + '_lumbar_segmentation' + extensionImages), True)
     sitk.WriteImage(output_single_mask, os.path.join(outputPathThisSubject, subject + '_lumbar_spine_mask' + extensionImages), True) #The binary segmentation will be called 'subject_lumbar_spine_mask.mhd'
 
     #VOLUME CALCULATION:
+
     #Segmentation to array
     segmentation_array = sitk.GetArrayFromImage(output)
+
+    # Number of labels of the segmentation
     num_labels = multilabelNum
+
+    # Voxel volume
     voxel_volume = np.prod(spacing) #volume (X.Y.Z)
 
         # Volume dictionary to save the label volumes
@@ -715,12 +953,25 @@ for idx, row in coords_df.iloc[0:2].iterrows():
 
     # Iterate over labels
     for label in range(1, num_labels+1):
+        # Creates a mask for the actual label (1 or 0)
         label_mask = (segmentation_array == label).astype(np.uint8)
+
+        # Counts the number of voxels
         label_voxels = np.sum(label_mask)
+
+        # Calculates the volume of that class (quantity of voxels * individual voxel volume)
         label_volume = label_voxels * voxel_volume
-        volumes[label] = label_volume       # Save the data on the dictionary
+
+        # Save the data on the dictionary
+        volumes[label] = label_volume
+
     #Add them to the list
     volume_all_subjects.append(volumes)
+
+    #Write on the .csv
+    write_volumes_to_csv(os.path.join(outputPathThisSubject, 'volumes_lumbar.csv'), volumes, subject)
+    write_volumes_to_csv(os.path.join(outputPath, vol_lumbar_all), volumes, subject)
+
     # Print the volume of all the labels:
     print("\nVolumes:")
     for label, volume in volumes.items():
@@ -733,6 +984,11 @@ for idx, row in coords_df.iloc[0:2].iterrows():
 
     # Images to numpy arrays
     fatfraction_array = sitk.GetArrayFromImage(ffLumbar)
+
+    #FF .CSV PATH:
+    output_csv_path = os.path.join(outputPathThisSubject, 'ffs.csv')
+
+    # Mean FF for every single label
     fat_fraction_means = {}
     fat_fraction_means_pelvis = {}
 
@@ -754,8 +1010,8 @@ for idx, row in coords_df.iloc[0:2].iterrows():
     fat_fraction_all_subjects.append(fat_fraction_means)
 
     # Write on the csv file
-    #write_ff_to_csv(os.path.join(outputPathThisSubject, 'ffs_lumbar.csv'), fat_fraction_means, subject)
-    #write_ff_to_csv(os.path.join(outputPath, ff_lumbar_all), fat_fraction_means, subject)
+    write_ff_to_csv(os.path.join(outputPathThisSubject, 'ffs_lumbar.csv'), fat_fraction_means, subject)
+    write_ff_to_csv(os.path.join(outputPath, ff_lumbar_all), fat_fraction_means, subject)
 
     # Print the results
     print("\nFFs:")
@@ -766,8 +1022,9 @@ for idx, row in coords_df.iloc[0:2].iterrows():
         else:
             print(f"Muscle {label}: Sin valores válidos")
 
-    ############     PELVIS   #######################################################
+    ############PELVIS!!! #######################################################
 
+    ############ PELVIS (GLÚTEO) ############
     print(f"Pelvis segmentation")
     # 1) Imagen de entrada (pelvis)
     if inPhaseImagePelvis is not None:
@@ -861,8 +1118,17 @@ for idx, row in coords_df.iloc[0:2].iterrows():
         label_vox = np.sum((segmentation_array_pelvis == label).astype(np.uint8))
         volumes_pelvis[label] = label_vox * voxel_volume_pelvis
 
-    #write_volumes_to_csv(os.path.join(outputPathThisSubject, 'volumes_pelvis.csv'), volumes_pelvis, subject)
-    #write_volumes_to_csv(os.path.join(outputPath, vol_pelvis_all), volumes_pelvis, subject)
+    write_volumes_to_csv(os.path.join(outputPathThisSubject, 'volumes_pelvis.csv'), volumes_pelvis, subject)
+    write_volumes_to_csv(os.path.join(outputPath, vol_pelvis_all), volumes_pelvis, subject)
+    # FF pelvis:
+    write_ff_to_csv(os.path.join(outputPathThisSubject, 'ffs_pelvis.csv'), fat_fraction_means_pelvis, subject)
+    write_ff_to_csv(os.path.join(outputPath, ff_pelvis_all), fat_fraction_means_pelvis, subject)
+
+    # combinado pelvis:
+    write_vol_ff_to_csv(os.path.join(outputPathThisSubject, 'volumes_and_ffs_pelvis.csv'),
+                        volumes_pelvis, fat_fraction_means_pelvis, subject)
+    write_vol_ff_to_csv(os.path.join(outputPath, volff_pelvis_all),
+                        volumes_pelvis, fat_fraction_means_pelvis, subject)
 
     print("\nVolumes (pelvis):")
     for label, volume in volumes_pelvis.items():
@@ -876,8 +1142,7 @@ for idx, row in coords_df.iloc[0:2].iterrows():
     )
 
     # 9) FF por etiqueta (pelvis) — usa la FF calculada arriba para pelvis (ffPelvis)
-    if ffPelvis is not None:
-        # --- FF por etiqueta ---
+    if 'ffPelvis' in locals():
         fatfraction_array_pelvis = sitk.GetArrayFromImage(ffPelvis)
         fat_fraction_means_pelvis = {}
         for label in range(1, multilabelNum + 1):
@@ -885,28 +1150,28 @@ for idx, row in coords_df.iloc[0:2].iterrows():
             fat_fraction_means_pelvis[label] = float(np.mean(fatfraction_array_pelvis[mask_l])) if np.any(
                 mask_l) else None
 
-        # ---- AGREGAR DATOS DE PELVIS A LAS LISTAS GLOBALES (ahora que ya hay FF) ----
-
-        volume_all_subjects.append(volumes_pelvis)
-
-        # FF media y volumen total de la máscara pelvis
-        pelvis_mask_array = sitk.GetArrayFromImage(pelvis_single_mask)
-        total_volume_pelvis = np.sum(pelvis_mask_array) * voxel_volume_pelvis
-        totalvolume_all_subjects.append(total_volume_pelvis)
-        masked_values_pelvis = fatfraction_array_pelvis[pelvis_mask_array > 0]
-        mean_ff_pelvis = np.mean(masked_values_pelvis) if masked_values_pelvis.size > 0 else None
-        meanff_all_subjects.append(mean_ff_pelvis)
-        fat_fraction_all_subjects.append(fat_fraction_means_pelvis)
-
-        # nombre diferenciado para el CSV grande
-        names_subjects.append(subject + "_pelvis")
+        write_ff_to_csv(os.path.join(outputPathThisSubject, 'ffs_pelvis.csv'), fat_fraction_means_pelvis, subject)
+        write_vol_ff_to_csv(os.path.join(outputPathThisSubject, 'volumes_and_ffs_pelvis.csv'),
+                            volumes_pelvis, fat_fraction_means_pelvis, subject)
     else:
         print("[WARN] No se encontró ffPelvis para calcular FF por etiqueta en pelvis.")
+
+    #SAVE THE VOLUME AND FF VALUES FOR EVERY SUBJECT ON THE SAME .CSV FILE:
+
+    # VOL & FF .CSV PATH:
+    output_csv_path = os.path.join(outputPathThisSubject, 'volumes_and_ffs.csv')
+
+    #CSV FOR ALL THE VOLUME AND FF LABELS:
+    write_vol_ff_to_csv(os.path.join(outputPathThisSubject, 'volumes_and_ffs_lumbar.csv'),
+                        volumes, fat_fraction_means, subject)
+    write_vol_ff_to_csv(os.path.join(outputPath, volff_lumbar_all),
+                        volumes, fat_fraction_means, subject)
 
     #TOTAL VOLUME:
     single_array = sitk.GetArrayFromImage(output_single_mask)
     num_segmented_voxels = np.sum(single_array)
     total_volume = num_segmented_voxels * voxel_volume #TOTAL VOLUME FOR THAT SUBJECT
+
     totalvolume_all_subjects.append(total_volume)
 
     #MEAN FF:
@@ -914,19 +1179,14 @@ for idx, row in coords_df.iloc[0:2].iterrows():
     masked_values = fatfraction_array[single_array > 0]
     # Calculate the mean ff
     mean_ff = np.mean(masked_values) #MEAN FF FOR THAT SUBJECT
+
     meanff_all_subjects.append(mean_ff)
 
     #Name
-    names_subjects.append(subject + "_lumbar")
+    names_subjects.append(subject)
+    subject_csv(subject,volumes,fat_fraction_means,total_volume,mean_ff,outputPathThisSubject)
 
-    # --- CSV this suject ---
-    write_vol_ff_simple_csv(os.path.join(outputPathThisSubject, "volumes_and_ffs.csv"),volumes, fat_fraction_means, subject)
-
-    # --- CSV global  ---
-    write_vol_ff_simple_csv(os.path.join(outputPath, "all_subjects_volumes_and_ffs.csv"),
-        volumes, fat_fraction_means, subject)
-
-#all_subjects_csv(names_subjects, volume_all_subjects, fat_fraction_all_subjects, totalvolume_all_subjects, meanff_all_subjects, outputPath)
+all_subjects_csv(names_subjects, volume_all_subjects, fat_fraction_all_subjects, totalvolume_all_subjects, meanff_all_subjects, general_path)
 
 #BINARY SEGMENTATIONS:
 #Run the methods that calculate the binary segmentation, calculate the total volume and the mean FF
@@ -934,4 +1194,5 @@ volume_results = process_and_save_segmentations(inputSeg, outputBinSeg)
 ff_results = apply_mask_and_calculate_ff(binarySegAndFFPath)
 
 # Save the results
-# save_results_to_csv(volume_results, ff_results, TotalVol_MeanFF_csv)
+save_results_to_csv(volume_results, ff_results, TotalVol_MeanFF_csv)
+
