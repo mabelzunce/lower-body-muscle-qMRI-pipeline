@@ -81,8 +81,5 @@ for idx, row in coords_df.iloc[7:8].iterrows():
         sitk_lumbar_image = images_dixon[dixon_tag][:,:, int(trochanter):int(vertebra_L1)]
         sitk.WriteImage(sitk_lumbar_image, f"{output_lumbar_this_volunteer_path}/{volunteer_id}_{dixon_output_tag[dixon_index]}.nii.gz")
 
-
-
-
 # --------------------------- END OF SCRIPT ---------------------------
 print("\nEND OF SCRIPT")
