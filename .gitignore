@@ -1,0 +1,15 @@
+.idea/workspace.xml
+src/.idea/.gitignore
+src/.idea/misc.xml
+src/.idea/modules.xml
+src/.idea/src.iml
+src/.idea/vcs.xml
+src/.idea/inspectionProfiles/profiles_settings.xml
+src/segmentation/IterationInfo.0.R0.txt
+src/segmentation/IterationInfo.0.R1.txt
+src/segmentation/IterationInfo.0.R2.txt
+src/segmentation/IterationInfo.0.R3.txt
+src/segmentation/transform.txt
+src/segmentation/TransformParameters.0.txt
+src/segmentation/TransformParameters.0.txt
+src/utils/__pycache__/utils.cpython-310.pyc
