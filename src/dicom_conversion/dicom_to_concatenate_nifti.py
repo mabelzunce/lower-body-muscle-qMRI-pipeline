@@ -13,7 +13,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../utils"))
 from utils import apply_bias_correction_2
 import SimpleITK as sitk
 # Configuration
-convert_dicom = False  # Set to False if you want to skip DICOM conversion
+convert_dicom = True  # Set to False if you want to skip DICOM conversion
 concatenate_niftis = True  # Set to False if you want to skip concatenation
 calculate_fat_fraction = True  # Set to False if you want to skip FF calculation
 # Datapath
