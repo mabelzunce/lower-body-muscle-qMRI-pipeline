@@ -2,12 +2,13 @@ import os, sys, csv
 import numpy as np, matplotlib.pyplot as plt
 import pandas as pd
 import SimpleITK as sitk, torch, imageio
+import DixonTissueSegmentation
 from PIL import Image
 from skimage.morphology import convex_hull_image
 from unet_3d import Unet
 sys.path.append(os.path.join(os.path.dirname(__file__), "../utils"))
 from utils import apply_bias_correction, multilabel, maxProb, FilterUnconnectedRegions
-
+from utils import ApplyBiasCorrection, apply_mask_and_calculate_ff, create_segmentation_overlay_animated_gif, load_segmentations_mhd, GetBodyMaskFromInPhaseDixon, GetBodyMaskFromFatDixonImage
 dixon_types = ['in', 'opp', 'f', 'w']
 dixon_output_tag = ['I', 'O', 'F', 'W']
 
@@ -29,8 +30,6 @@ def ApplyBiasCorrection(inputImage, shrinkFactor = (1,1,1)):
         # Shrink image and mask to accelerate:
         shrinkedInput = sitk.Shrink(inputImage, shrinkFactor)
         mask = sitk.Shrink(mask, shrinkFactor)
-
-
         #biasFieldCorrFilter.SetNumberOfThreads()
         #biasFieldCorrFilter.UseMaskLabelOff() # Because I'm having problems with the mask.
         # Run the filter:
@@ -46,10 +45,8 @@ def ApplyBiasCorrection(inputImage, shrinkFactor = (1,1,1)):
         biasField.SetSpacing(shrinkedInput.GetSpacing())
         biasField.SetOrigin(shrinkedInput.GetOrigin())
         biasField.SetDirection(shrinkedInput.GetDirection())
-
         # Now expand
         biasField = sitk.Resample(biasField, inputImage)
-
         # Apply to the image:
         output = sitk.Multiply(inputImage, biasField)
     else:
@@ -58,51 +55,6 @@ def ApplyBiasCorrection(inputImage, shrinkFactor = (1,1,1)):
     # return the output:
     return output
 
-#BINARY SEGMENTATIONS:
-# Function to load, binarize and save segmentations
-#Also calculates the total volume of the binary segmentation
-def process_and_save_segmentations(folder, output_folder):
-    volume_results = {}
-    # CCreate output directory
-    os.makedirs(output_folder, exist_ok=True)
-
-    for file in os.listdir(folder):
-        if file.endswith(".mhd") and "_segmentation" in file:
-            filepath = os.path.join(folder, file)
-            key = file.replace("_segmentation.mhd", "")
-
-            segmentation_image = sitk.ReadImage(filepath)
-            array = sitk.GetArrayFromImage(segmentation_image)  # Array 3D: (Depth, Height, Width)
-
-            # Binarize
-            binary_array = (array > 0).astype("uint8")
-
-            # Convert again to image
-            binary_image = sitk.GetImageFromArray(binary_array)
-
-            # Copy spatial information
-            binary_image.CopyInformation(segmentation_image)
-
-            # Save the binary image in the output directory
-            output_path = os.path.join(output_folder, f"{key}_seg_binary.mhd")
-            sitk.WriteImage(binary_image, output_path, True)
-
-            print(f"Binary segmentation saved in: {output_path}")
-
-            # Volume calculation:
-            spacing = segmentation_image.GetSpacing()  # (z_spacing, y_spacing, x_spacing)
-
-            voxel_volume = spacing[0] * spacing[1] * spacing[2]  # Volumen de un voxel
-
-            num_segmented_voxels = np.sum(binary_array)
-
-            total_volume = num_segmented_voxels * voxel_volume
-
-            volume_results[key] = total_volume
-
-            print(f"Total volume for {key}: {total_volume} mm^3")
-
-    return volume_results
 
 #APPLY MASK AND CALCULATE MEAN FF:
 def apply_mask_and_calculate_ff(folder):
@@ -407,44 +359,61 @@ def load_tissue_segmentations(folder):
     return segmentations
 
 
-def write_vol_ff_simple_csv(output_csv_path, volumes, ffs, subject_name):
-    """
-    Guarda en un CSV los volúmenes y FFs por etiqueta.
-    - output_csv_path: ruta al archivo CSV de salida
-    - volumes: diccionario {label: volumen}
-    - ffs: diccionario {label: FF}
-    - subject_name: nombre del sujeto
-    """
-    file_exists = os.path.isfile(output_csv_path)
-    with open(output_csv_path, mode='a', newline='') as csv_file:
-        writer = csv.writer(csv_file)
-        # Escribir cabecera si el archivo es nuevo
-        if not file_exists:
-            headers = (["Subject"] +
-                       [f"Vol {l}" for l in sorted(volumes.keys())] +
-                       [f"FF {l}" for l in sorted(ffs.keys())])
-            writer.writerow(headers)
+import os, csv
 
-        row = [subject_name] + \
+def write_vol_ff_simple_csv(output_csv_path, volumes, ffs, subject_name):
+    # Crear headers y nueva fila
+    headers = (["Subject"] +
+               [f"Vol {l}" for l in sorted(volumes.keys())] +
+               [f"FF {l}" for l in sorted(ffs.keys())])
+
+    new_row = [subject_name] + \
               [volumes[l] for l in sorted(volumes.keys())] + \
               [ffs[l] for l in sorted(ffs.keys())]
-        writer.writerow(row)
+
+    # Si no existe, crear archivo desde cero
+    if not os.path.isfile(output_csv_path):
+        with open(output_csv_path, mode='w', newline='') as csv_file:
+            writer = csv.writer(csv_file)
+            writer.writerow(headers)
+            writer.writerow(new_row)
+        return
+
+    # Si existe, leer todas las filas
+    with open(output_csv_path, mode='r', newline='') as csv_file:
+        reader = list(csv.reader(csv_file))
+        headers_existing = reader[0]
+        rows = reader[1:]
+
+    # Buscar si ya existe el sujeto
+    updated = False
+    for i, row in enumerate(rows):
+        if row[0] == subject_name:
+            rows[i] = new_row
+            updated = True
+            break
+
+    # Si no estaba, lo agregamos
+    if not updated:
+        rows.append(new_row)
+
+    # Reescribir el archivo completo con cambios
+    with open(output_csv_path, mode='w', newline='') as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(headers_existing)  # conservar headers
+        writer.writerows(rows)
+
 
 # --------------------------- CONFIG PATHS  ---------------------------
 input_root = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifty_output/'
-outputPath = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/segmentations/' #PATH DE SALIDA (Donde se guardan los resultados)
+outputPath = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/segmentations/'
 output_pelvis_path = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifti_pelvis/'
 output_lumbar_path = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifti_lumbar/'
-#outputBiasCorrectedPath = outputPath + '/BiasFieldCorrection/'
 os.makedirs(outputPath, exist_ok=True)
 os.makedirs(output_pelvis_path, exist_ok=True)
 os.makedirs(output_lumbar_path, exist_ok=True)
 coord_csv = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/slices_cortes_anatomicos.csv'
-
-# REFERENCE IMAGE FOR THE PRE PROCESSING REGISTRATION:
 coords_df = pd.read_csv(coord_csv)
-
-#referenceGluteusImageFilename = '/home/martin/data_imaging/Muscle/GlutealSegmentations/PelvisFOV/ManualSegmentations/MhdRegisteredDownsampled/ID00002.mhd'
 
 # Modelos
 lumbar_model_path  = "/home/german/lower-body-muscle-qMRI-pipeline/models/lumbarspine_unet3d_20230626_191618_173_best_fit.pt"
@@ -457,24 +426,17 @@ gluteus_reference_path = "/home/german/lower-body-muscle-qMRI-pipeline/data/refe
 
 # CONFIGURATION:
 device_to_use = 'cuda' #'cpu'
-# Needs registration
 preRegistration = True #TRUE: Pre-register using the next image
 dataInSubdirPerSubject = True
-registrationReferenceFilename = '/data/MuscleSegmentation/Data/LumbarSpine3D/ResampledData/C00001.mhd'
 
 imageNames = []
 imageFilenames = []
-i = 0
 fat_fraction_all_subjects = list() #List to then write the .csv file
 volume_all_subjects = list() #List to then write the .csv file
 totalvolume_all_subjects = list()
 meanff_all_subjects = list()
 names_subjects = list()
-
-#PATHS FOR THE BINARY SEGMENTATION: In that case input and output paths are the same
-inputSeg = outputPath # Where the original segmentations are saved
-outputBinSeg = outputPath # Where will be the binary segmentations
-binarySegAndFFPath = outputPath #Folder that contains the binary segmentation and 'ff' images
+i = 0
 
 # REGISTRATION PARAMETER FILES:
 similarityMetricForReg = 'NMI' #NMI Metric
@@ -504,11 +466,15 @@ if device.type == 'cuda':
     f = r-a  # free inside reserved
     print('Total memory: {0}. Reserved memory: {1}. Allocated memory:{2}. Free memory:{3}.'.format(t,r,a,f))
 
-
 # Read images:
 referenceImage_lumbar  = sitk.ReadImage(lumbar_reference_path)
 referenceImage_gluteus = sitk.ReadImage(gluteus_reference_path)
 
+# Parameters for image registration:
+parameterMapVector = sitk.VectorOfParameterMap()
+parameterMapVector.append(sitk.ElastixImageFilter().ReadParameterFile(parameterFilesPath + paramFileRigid + '.txt'))
+print('Lumbar reference voxel size:', referenceImage_lumbar.GetSize())
+print('Gluteus reference voxel size:', referenceImage_gluteus.GetSize())
 
 # MODEL INIT:
 multilabelNum = 8
@@ -517,12 +483,6 @@ lumbarModel = Unet(1, multilabelNum).to(device)
 lumbarModel.load_state_dict(torch.load(lumbar_model_path, map_location=device))
 glutealModel = Unet(1, multilabelNum).to(device)
 glutealModel.load_state_dict(torch.load(gluteal_model_path, map_location=device))
-
-# Parameters for image registration:
-parameterMapVector = sitk.VectorOfParameterMap()
-parameterMapVector.append(sitk.ElastixImageFilter().ReadParameterFile(parameterFilesPath + paramFileRigid + '.txt'))
-print('Lumbar reference voxel size:', referenceImage_lumbar.GetSize())
-print('Gluteus reference voxel size:', referenceImage_gluteus.GetSize())
 
 # --------------------------- PROCESS EACH VOLUNTEER ---------------------------
 
@@ -926,12 +886,3 @@ for idx, row in coords_df.iloc[0:2].iterrows():
     write_vol_ff_simple_csv(os.path.join(outputPath, "all_subjects_volumes_and_ffs.csv"),
         volumes, fat_fraction_means, subject)
 
-#all_subjects_csv(names_subjects, volume_all_subjects, fat_fraction_all_subjects, totalvolume_all_subjects, meanff_all_subjects, outputPath)
-
-#BINARY SEGMENTATIONS:
-#Run the methods that calculate the binary segmentation, calculate the total volume and the mean FF
-volume_results = process_and_save_segmentations(inputSeg, outputBinSeg)
-ff_results = apply_mask_and_calculate_ff(binarySegAndFFPath)
-
-# Save the results
-# save_results_to_csv(volume_results, ff_results, TotalVol_MeanFF_csv)
