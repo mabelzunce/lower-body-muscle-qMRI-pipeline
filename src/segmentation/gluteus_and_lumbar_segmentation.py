@@ -8,7 +8,6 @@ from skimage.morphology import convex_hull_image
 from unet_3d import Unet
 sys.path.append(os.path.join(os.path.dirname(__file__), "../utils"))
 from utils import apply_bias_correction, multilabel, maxProb, FilterUnconnectedRegions
-from utils import ApplyBiasCorrection, apply_mask_and_calculate_ff, create_segmentation_overlay_animated_gif, load_segmentations_mhd, GetBodyMaskFromInPhaseDixon, GetBodyMaskFromFatDixonImage
 dixon_types = ['in', 'opp', 'f', 'w']
 dixon_output_tag = ['I', 'O', 'F', 'W']
 
@@ -260,81 +259,6 @@ def BinaryFillHolePerSlice(input):
         output = sitk.Paste(output, slice, slice.GetSize(), destinationIndex=[0, 0, j])
     return output
 
-
-# FUNCION SEGMENTAR TODOS LOS TEJIDOS
-# DixonTissueSegmentation received the four dixon images in the following order: in-phase, out-of-phase, water, fat.
-# Returns a labelled image into 4 tissue types: air-background (0), soft-tissue (1), soft-tissue/fat (2), fat (3)
-def DixonTissueSegmentation(dixonImages):
-    labelAir = 0
-    labelFat = 3
-    labelSoftTissue = 1
-    labelFatWater = 2
-    labelBone = 4
-    labelUnknown = 5
-
-    # Threshold for background:
-    backgroundThreshold = 80
-    # Threshold for water fat ratio:
-    waterFatThreshold = 2
-    # Generate a new image:
-    segmentedImage = sitk.Image(dixonImages[0].GetSize(), sitk.sitkUInt8)
-    segmentedImage.SetSpacing(dixonImages[0].GetSpacing())
-    segmentedImage.SetOrigin(dixonImages[0].GetOrigin())
-    segmentedImage.SetDirection(dixonImages[0].GetDirection())
-
-    # otsuOtuput = sitk.OtsuMultipleThresholds(dixonImages[0], 4, 0, 128, False)
-    # voxelsAir = sitk.Equal(otsuOtuput, 0)
-    # Faster and simpler version but will depend on intensities:
-    voxelsAir = sitk.Less(dixonImages[0], backgroundThreshold)
-
-    # Set air tags for lower values:
-    # segmentedImage = sitk.Mask(segmentedImage, voxelsAir, labelUnknown, labelAir)
-    ndaSegmented = sitk.GetArrayFromImage(segmentedImage)
-    ndaInPhase = sitk.GetArrayFromImage(dixonImages[0])
-    ndaSegmented.fill(labelUnknown)
-    ndaSegmented[ndaInPhase < backgroundThreshold] = labelAir
-
-    # Get arrays for the images:
-    ndaInPhase = sitk.GetArrayFromImage(dixonImages[0])
-    ndaOutOfPhase = sitk.GetArrayFromImage(dixonImages[1])
-    ndaWater = sitk.GetArrayFromImage(dixonImages[2])
-    ndaFat = sitk.GetArrayFromImage(dixonImages[3])
-
-    # SoftTisue:
-    WFratio = np.zeros(ndaWater.shape)
-    WFratio[(ndaFat != 0)] = ndaWater[(ndaFat != 0)] / ndaFat[(ndaFat != 0)]
-    # ndaSegmented[np.isnan(WFratio)] = labelUnknown
-    ndaSegmented[np.logical_and(WFratio >= waterFatThreshold, (ndaSegmented == labelUnknown))] = labelSoftTissue
-    # Also include when fat is zero and water is different to zero:
-    ndaSegmented[np.logical_and((ndaWater != 0) & (ndaFat == 0), (ndaSegmented == labelUnknown))] = labelSoftTissue
-
-    # For fat use the FW ratio:
-    WFratio = np.zeros(ndaWater.shape)
-    WFratio[(ndaWater != 0)] = ndaFat[(ndaWater != 0)] / ndaWater[(ndaWater != 0)]
-
-    # Fat:
-    ndaSegmented[np.logical_and(WFratio >= waterFatThreshold, ndaSegmented == labelUnknown)] = labelFat
-    ndaSegmented[np.logical_and((ndaWater != 0) & (ndaFat == 0), (ndaSegmented == labelUnknown))] = labelFat
-
-    # SoftTissue/Fat:
-    ndaSegmented[np.logical_and(WFratio < waterFatThreshold, ndaSegmented == labelUnknown)] = labelFatWater
-
-    # Set the array:
-    segmentedImage = sitk.GetImageFromArray(ndaSegmented)
-    segmentedImage.SetSpacing(dixonImages[0].GetSpacing())
-    segmentedImage.SetOrigin(dixonImages[0].GetOrigin())
-    segmentedImage.SetDirection(dixonImages[0].GetDirection())
-
-    # The fat fraction image can have issues in the edge, for that reason we apply a body mask from the inphase image
-    maskBody = GetBodyMaskFromInPhaseDixon(dixonImages[0], vectorRadius=(2, 2, 2))
-
-    # Apply mask:
-    maskFilter = sitk.MaskImageFilter()
-    maskFilter.SetMaskingValue(1)
-    maskFilter.SetOutsideValue(0)
-    segmentedImage = maskFilter.Execute(segmentedImage, sitk.Not(maskBody))
-    return segmentedImage
-
 # Función para encontrar y cargar segmentaciones de tejidos
 def load_tissue_segmentations(folder):
     segmentations = {}
@@ -358,51 +282,70 @@ def load_tissue_segmentations(folder):
     print(f"Total de archivos encontrados: {len(segmentations)}")
     return segmentations
 
+def write_vol_ff_simple_csv(output_csv_path, volumes_lumbar, ffs_lumbar,
+                            volumes_pelvis, ffs_pelvis,
+                            skinfat_total=None, skinfat_pelvis=None,
+                            subject_name="NA"):
+    volumes_all = {}
+    for k, v in volumes_lumbar.items():
+        volumes_all[f"Lumbar_{k}"] = v
+    for k, v in volumes_pelvis.items():
+        volumes_all[f"Pelvis_{k}"] = v
 
-import os, csv
+    ffs_all = {}
+    for k, v in ffs_lumbar.items():
+        ffs_all[f"Lumbar_{k}"] = v
+    for k, v in ffs_pelvis.items():
+        ffs_all[f"Pelvis_{k}"] = v
 
-def write_vol_ff_simple_csv(output_csv_path, volumes, ffs, subject_name):
-    # Crear headers y nueva fila
-    headers = (["Subject"] +
-               [f"Vol {l}" for l in sorted(volumes.keys())] +
-               [f"FF {l}" for l in sorted(ffs.keys())])
+    # Agregar extras (si existen)
+    if skinfat_total is not None:
+        volumes_all["skinFat_total"] = skinfat_total
+    if skinfat_pelvis is not None:
+        volumes_all["skinFat_pelvis"] = skinfat_pelvis
 
-    new_row = [subject_name] + \
-              [volumes[l] for l in sorted(volumes.keys())] + \
-              [ffs[l] for l in sorted(ffs.keys())]
+    # ---------- 2) Armar headers y fila ----------
+    headers = (
+        ["Subject"]
+        + [f"Vol {k}" for k in volumes_all.keys()]
+        + [f"FF {k}" for k in ffs_all.keys()]
+    )
 
-    # Si no existe, crear archivo desde cero
+    new_row = [subject_name] \
+        + [volumes_all[k] for k in volumes_all.keys()] \
+        + [ffs_all[k] for k in ffs_all.keys()]
+
+    # ---------- 3) Escribir / actualizar CSV ----------
+    import csv, os
+
     if not os.path.isfile(output_csv_path):
-        with open(output_csv_path, mode='w', newline='') as csv_file:
+        # Crear archivo nuevo
+        with open(output_csv_path, mode="w", newline="") as csv_file:
             writer = csv.writer(csv_file)
             writer.writerow(headers)
             writer.writerow(new_row)
-        return
+    else:
+        # Leer archivo existente
+        with open(output_csv_path, mode="r", newline="") as csv_file:
+            reader = list(csv.reader(csv_file))
+            headers_existing = reader[0]
+            rows = reader[1:]
 
-    # Si existe, leer todas las filas
-    with open(output_csv_path, mode='r', newline='') as csv_file:
-        reader = list(csv.reader(csv_file))
-        headers_existing = reader[0]
-        rows = reader[1:]
+        # Si el sujeto ya existe, reemplazar fila
+        updated = False
+        for i, row in enumerate(rows):
+            if row[0] == subject_name:
+                rows[i] = new_row
+                updated = True
+                break
+        if not updated:
+            rows.append(new_row)
 
-    # Buscar si ya existe el sujeto
-    updated = False
-    for i, row in enumerate(rows):
-        if row[0] == subject_name:
-            rows[i] = new_row
-            updated = True
-            break
-
-    # Si no estaba, lo agregamos
-    if not updated:
-        rows.append(new_row)
-
-    # Reescribir el archivo completo con cambios
-    with open(output_csv_path, mode='w', newline='') as csv_file:
-        writer = csv.writer(csv_file)
-        writer.writerow(headers_existing)  # conservar headers
-        writer.writerows(rows)
-
+        # Reescribir archivo completo
+        with open(output_csv_path, mode="w", newline="") as csv_file:
+            writer = csv.writer(csv_file)
+            writer.writerow(headers_existing)
+            writer.writerows(rows)
 
 # --------------------------- CONFIG PATHS  ---------------------------
 input_root = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifty_output/'
@@ -412,7 +355,7 @@ output_lumbar_path = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifti_lumbar/
 os.makedirs(outputPath, exist_ok=True)
 os.makedirs(output_pelvis_path, exist_ok=True)
 os.makedirs(output_lumbar_path, exist_ok=True)
-coord_csv = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/slices_cortes_anatomicos.csv'
+coord_csv = '/home/german/lower-body-muscle-qMRI-pipeline/data/mri_info.csv'
 coords_df = pd.read_csv(coord_csv)
 
 # Modelos
@@ -486,8 +429,8 @@ glutealModel.load_state_dict(torch.load(gluteal_model_path, map_location=device)
 
 # --------------------------- PROCESS EACH VOLUNTEER ---------------------------
 
-#for idx, row in coords_df.iterrows():
-for idx, row in coords_df.iloc[0:2].iterrows():
+for idx, row in coords_df.iterrows():
+#for idx, row in coords_df.iloc[0:1].iterrows():
     inPhaseImageLumbar, fatImageLumbar, waterImageLumbar = None, None, None
     inPhaseImagePelvis, fatImagePelvis, waterImagePelvis = None, None, None
     ffLumbar, ffPelvis = None, None
@@ -495,9 +438,9 @@ for idx, row in coords_df.iloc[0:2].iterrows():
     subject = volunteer_id
     outputPathThisSubject = os.path.join(outputPath, volunteer_id )
     os.makedirs(outputPathThisSubject, exist_ok=True)
-    trochanter = int(row['Trocánter menor'])
-    iliac_crest = int(row['Cresta iliaca'])
-    vertebra_L1 = int(row['Vértebra L1'])
+    trochanter = int(row['Lesser Trochanter'])
+    iliac_crest = int(row['Iliac Crest'])
+    vertebra_L1 = int(row['L1'])
     print(f"\n=== Processing volunteer: {volunteer_id} ===\nTLesser trochanter: {trochanter}\nTop Iliac Crest: {iliac_crest}\nL1: {vertebra_L1}")
 
     # --------------------------- LOAD IMAGE ---------------------------
@@ -530,6 +473,8 @@ for idx, row in coords_df.iloc[0:2].iterrows():
             fatImagePelvis = sitk_pelvis_image
         elif dixon_tag == 'w':
             waterImagePelvis = sitk_pelvis_image
+        elif dixon_tag == 'opp':
+            outOfPhaseImagePelvis = sitk_pelvis_image
 
         # --------------------------- CROP LUMBAR REGION ---------------------------
         sitk_lumbar_image = images_dixon[dixon_tag][:,:, int(trochanter):int(vertebra_L1)]
@@ -541,6 +486,106 @@ for idx, row in coords_df.iloc[0:2].iterrows():
         elif dixon_tag == 'w':
             waterImageLumbar = sitk_lumbar_image
         # --------------------------- END OF CROP --------------------------
+
+    # -------------------- TISSUE / SUBCUTANEOUS FAT SEGMENTATION --------------------
+    print("Running Dixon tissue segmentation...")
+
+    # 1) Generate the tissue segmented image
+    dixonImages_list = [
+        images_dixon['in'],
+        images_dixon['opp'],
+        images_dixon['w'],
+        images_dixon['f']
+    ]
+    segmentedImage = DixonTissueSegmentation.DixonTissueSegmentation(dixonImages_list)
+    sitk.WriteImage(
+        segmentedImage,
+        os.path.join(outputPathThisSubject, f"{subject}_tissue_segmented{extensionImages}"),
+        True
+    )
+
+    # 2) Body mask (from the fat image, usually more robust)
+    bodyMask = DixonTissueSegmentation.GetBodyMaskFromFatDixonImage(
+        images_dixon['f'], vectorRadius=(2, 2, 1)
+    )
+    sitk.WriteImage(
+        bodyMask,
+        os.path.join(outputPathThisSubject, f"{subject}_bodyMask{extensionImages}"),
+        True
+    )
+
+    # 3) Subcutaneous fat mask (using convex hull, slice by slice)
+    skinFat = DixonTissueSegmentation.GetSkinFatFromTissueSegmentedImageUsingConvexHullPerSlice(segmentedImage)
+    skinFat = sitk.And(skinFat, bodyMask)  # remove artefacts outside the body
+    sitk.WriteImage(skinFat,
+        os.path.join(outputPathThisSubject, f"{subject}_skinFat{extensionImages}"),
+        True
+    )
+
+    # --- Subcutaneous fat mask for pelvis crop ---
+    print("Running subcutaneous fat mask for pelvis crop...")
+    # Generar la segmentación de tejidos solo en el recorte de pelvis
+    dixonImages_pelvis = [inPhaseImagePelvis,outOfPhaseImagePelvis,waterImagePelvis,fatImagePelvis]
+    segmentedPelvis = DixonTissueSegmentation.DixonTissueSegmentation(dixonImages_pelvis)
+    # Body mask en el recorte de pelvis (desde fat)
+    bodyMaskPelvis = DixonTissueSegmentation.GetBodyMaskFromFatDixonImage(fatImagePelvis, vectorRadius=(2, 2, 1))
+
+    # SkinFat en pelvis
+    skinFatPelvis = DixonTissueSegmentation.GetSkinFatFromTissueSegmentedImageUsingConvexHullPerSlice(segmentedPelvis)
+    skinFatPelvis = sitk.And(skinFatPelvis, bodyMaskPelvis)
+
+    # Guardar
+    sitk.WriteImage(
+        skinFatPelvis,
+        os.path.join(outputPathThisSubject, f"{subject}_pelvis_skinFat{extensionImages}"),
+        True
+    )
+
+    # 4) Muscle mask
+    muscleMask = DixonTissueSegmentation.GetMuscleMaskFromTissueSegmentedImage(
+        segmentedImage, vectorRadius=(4, 4, 3)
+    )
+    sitk.WriteImage(
+        muscleMask,
+        os.path.join(outputPathThisSubject, f"{subject}_muscleMask{extensionImages}"),
+        True
+    )
+
+    # Generate GIF
+    image_path = os.path.join("/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifti_pelvis/", f"{subject}", f"{subject}_I.nii.gz")
+    mask_path = os.path.join(outputPathThisSubject, f"{subject}_pelvis_skinFat{extensionImages}")
+    gif_output = os.path.join(outputPathThisSubject, f"{subject}_pelvis_skinFat_overlay.gif")
+    # Load image and mask
+    sitkImage = sitk.ReadImage(image_path)
+    sitkMask = sitk.ReadImage(mask_path)
+    # Make sure mask has same metadata as image
+    sitkMask.CopyInformation(sitkImage)
+    create_segmentation_overlay_animated_gif(sitkImage, sitkMask, gif_output)
+
+    # Generate GIF
+
+    # Paths dinámicos para este voluntario
+    image_path = os.path.join(input_folder, f"{subject}_in_dixon_concatenated.nii.gz")
+    mask_path = os.path.join(outputPathThisSubject, f"{subject}_skinFat{extensionImages}")
+    gif_output = os.path.join(outputPathThisSubject, f"{subject}_skinFat_overlay.gif")
+    # Load image and mask
+    sitkImage = sitk.ReadImage(image_path)
+    sitkMask = sitk.ReadImage(mask_path)
+    # Make sure mask has same metadata as image
+    sitkMask.CopyInformation(sitkImage)
+    create_segmentation_overlay_animated_gif(sitkImage, sitkMask, gif_output)
+
+    # === VOLUMES OF SUBCUTANEOUS FAT ===
+
+    # Volumen de skinFat total
+    skinFat_array = sitk.GetArrayFromImage(skinFat)
+    voxel_volume = np.prod(skinFat.GetSpacing())
+    skinFat_total_vol = np.sum(skinFat_array > 0) * voxel_volume
+
+    # Volumen de skinFat en pelvis
+    skinFat_pelvis_array = sitk.GetArrayFromImage(skinFatPelvis)
+    voxel_volume_pelvis = np.prod(skinFatPelvis.GetSpacing())
+    skinFat_pelvis_vol = np.sum(skinFat_pelvis_array > 0) * voxel_volume_pelvis
 
     # -------------------- FAT FRACTION CALCULATION --------------------
 
@@ -879,10 +924,30 @@ for idx, row in coords_df.iloc[0:2].iterrows():
     #Name
     names_subjects.append(subject + "_lumbar")
 
+
     # --- CSV this suject ---
-    write_vol_ff_simple_csv(os.path.join(outputPathThisSubject, "volumes_and_ffs.csv"),volumes, fat_fraction_means, subject)
+    write_vol_ff_simple_csv(
+        os.path.join(outputPathThisSubject, "volumes_and_ffs.csv"),
+        volumes, fat_fraction_means,  # lumbar
+        volumes_pelvis, fat_fraction_means_pelvis,  # pelvis
+        skinfat_total=skinFat_total_vol,
+        skinfat_pelvis=skinFat_pelvis_vol,
+        subject_name=subject)
 
     # --- CSV global  ---
-    write_vol_ff_simple_csv(os.path.join(outputPath, "all_subjects_volumes_and_ffs.csv"),
-        volumes, fat_fraction_means, subject)
+
+    # Y lo mismo para el CSV global
+    write_vol_ff_simple_csv(
+        os.path.join(outputPath, "all_subjects_volumes_and_ffs.csv"),
+        volumes, fat_fraction_means,
+        volumes_pelvis, fat_fraction_means_pelvis,
+        skinfat_total=skinFat_total_vol,
+        skinfat_pelvis=skinFat_pelvis_vol,
+        subject_name=subject)
+
+    # --- CSV this suject ---
+    #write_vol_ff_simple_csv(os.path.join(outputPathThisSubject, "volumes_and_ffs.csv"),volumes, fat_fraction_means, subject)
+
+    # --- CSV global  ---
+    #write_vol_ff_simple_csv(os.path.join(outputPath, "all_subjects_volumes_and_ffs.csv"),volumes, fat_fraction_means, subject)
 
