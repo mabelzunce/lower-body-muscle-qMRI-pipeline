@@ -1,18 +1,18 @@
-ID	Long FOV Dixon	TR	TE	Lesser Trochanter	Iliac Crest	L1	Short FOV Dixon	TR	TE	Lesser Trochanter	Iliac Crest	L1	T2 Mapping	TR	Tes
-S0001	yes			108	152	178	no								
-S0002	yes			170	215	236	no								
-S0003	yes			160	211	235	no								
-S0004	yes			160	210	228	no								
-S0005	yes			168	206	230	no								
-S0006	yes			173	211	237	no								
-S0007	yes			161	206	230	no								
-S0009	yes			161	207	232	no								
-S0010	yes			111	152	174	no								
-S0013	yes			160	206	228	no								
-S0014	yes			111	154	174	no								
-S0015	yes			155	202	225	no								
-S0018	yes			170	213	239	no								
-S0019	yes			168	212	237	no								
-S0020	yes			105	198	174	no								
-S0021	yes						yes								
-S0022	yes						yes								
+ID,Long FOV Dixon,TR,TE,Lesser Trochanter,Iliac Crest,L1,Short FOV Dixon,TR,TE,Lesser Trochanter Short,Iliac Crest Short,L1 Short,T2 Mapping,TR,Tes
+S0001,yes,,,108,152,178,no,,,,,,,,
+S0002,yes,,,170,215,236,no,,,,,,,,
+S0003,yes,,,160,211,235,no,,,,,,,,
+S0004,yes,,,160,210,228,no,,,,,,,,
+S0005,yes,,,168,206,230,no,,,,,,,,
+S0006,yes,,,173,211,237,no,,,,,,,,
+S0007,yes,,,161,206,230,no,,,,,,,,
+S0009,yes,,,161,207,232,no,,,,,,,,
+S0010,yes,,,111,152,174,no,,,,,,yes,,
+S0013,yes,,,160,206,228,no,,,,,,yes,,
+S0014,yes,,,111,154,174,no,,,,,,yes,,
+S0015,yes,,,155,202,225,no,,,,,,yes,,
+S0018,yes,,,170,213,239,no,,,,,,yes,,
+S0019,yes,,,168,212,237,no,,,,,,yes,,
+S0020,yes,,,105,148,174,no,,,,,,yes,,
+S0021,yes,,,95,131,155,yes,,,,,,yes,,
+S0022,yes,,,160,210,235,yes,,,,,,yes,,
