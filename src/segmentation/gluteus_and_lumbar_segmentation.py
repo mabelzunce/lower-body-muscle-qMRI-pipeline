@@ -7,345 +7,9 @@ from PIL import Image
 from skimage.morphology import convex_hull_image
 from unet_3d import Unet
 sys.path.append(os.path.join(os.path.dirname(__file__), "../utils"))
-from utils import apply_bias_correction, multilabel, maxProb, FilterUnconnectedRegions
+from utils import create_segmentation_overlay_animated_gif, apply_bias_correction, multilabel, maxProb, FilterUnconnectedRegions, write_vol_ff_simple_csv
 dixon_types = ['in', 'opp', 'f', 'w']
 dixon_output_tag = ['I', 'O', 'F', 'W']
-
-# --------------------------- FUNCTIONS  ---------------------------
-
-# BIAS FIELD CORRECTION
-def ApplyBiasCorrection(inputImage, shrinkFactor = (1,1,1)):
-    # Bias correction filter:
-    biasFieldCorrFilter = sitk.N4BiasFieldCorrectionImageFilter()
-    mask = sitk.OtsuThreshold( inputImage, 0, 1, 100)
-    inputImage = sitk.Cast(inputImage, sitk.sitkFloat32)
-
-    # Parameter for the bias corredtion filter:
-    biasFieldCorrFilter.SetSplineOrder(3)
-    biasFieldCorrFilter.SetConvergenceThreshold(0.0001)
-    biasFieldCorrFilter.SetMaximumNumberOfIterations((50, 40, 30))
-
-    if shrinkFactor != (1,1,1):
-        # Shrink image and mask to accelerate:
-        shrinkedInput = sitk.Shrink(inputImage, shrinkFactor)
-        mask = sitk.Shrink(mask, shrinkFactor)
-        #biasFieldCorrFilter.SetNumberOfThreads()
-        #biasFieldCorrFilter.UseMaskLabelOff() # Because I'm having problems with the mask.
-        # Run the filter:
-        output = biasFieldCorrFilter.Execute(shrinkedInput, mask)
-        # Get the field by dividing the output by the input:
-        outputArray = sitk.GetArrayFromImage(output)
-        shrinkedInputArray = sitk.GetArrayFromImage(shrinkedInput)
-        biasFieldArray = np.ones(np.shape(outputArray), 'float32')
-        biasFieldArray[shrinkedInputArray != 0] = outputArray[shrinkedInputArray != 0]/shrinkedInputArray[shrinkedInputArray != 0]
-        biasFieldArray[shrinkedInputArray == 0] = 0
-        # Generate bias field image:
-        biasField = sitk.GetImageFromArray(biasFieldArray)
-        biasField.SetSpacing(shrinkedInput.GetSpacing())
-        biasField.SetOrigin(shrinkedInput.GetOrigin())
-        biasField.SetDirection(shrinkedInput.GetDirection())
-        # Now expand
-        biasField = sitk.Resample(biasField, inputImage)
-        # Apply to the image:
-        output = sitk.Multiply(inputImage, biasField)
-    else:
-        #output = biasFieldCorrFilter.Execute(inputImage, mask)
-        output = biasFieldCorrFilter.Execute(inputImage)
-    # return the output:
-    return output
-
-
-#APPLY MASK AND CALCULATE MEAN FF:
-def apply_mask_and_calculate_ff(folder):
-    ff_results = {}
-    for file in os.listdir(folder):
-        if file.endswith("_seg_binary.mhd"):
-            # Load the binary mask
-            mask_path = os.path.join(folder, file)
-            mask_image = sitk.ReadImage(mask_path)
-            mask_array = sitk.GetArrayFromImage(mask_image)  # Array 3D: (Depth, Height, Width)
-
-            # Find the '_ff' image for every subject
-            key = file.replace("_seg_binary.mhd", "")
-            ff_file = f"{key}_ff.mhd"
-            ff_path = os.path.join(folder, ff_file)
-
-            if os.path.exists(ff_path):
-                # Load the '_ff' image
-                ff_image = sitk.ReadImage(ff_path)
-                ff_array = sitk.GetArrayFromImage(ff_image)  # Array 3D: (Depth, Height, Width)
-
-                # Check the dimensions
-                if mask_array.shape != ff_array.shape:
-                    print(f"Dimensiones no coinciden entre máscara y '_ff' para: {key}")
-                    continue
-
-                # Apply the mask
-                masked_values = ff_array[mask_array > 0]
-
-                # Calculate the mean ff
-                mean_ff = np.mean(masked_values)
-                ff_results[key] = mean_ff
-
-                print(f"Mean FF for {key}: {mean_ff}")
-
-    return ff_results
-
-
-def create_segmentation_overlay_animated_gif(sitkImage, sitkLabels, output_path):
-    frames = []
-    imageSize = sitkImage.GetSize()
-    sitkImage = sitk.RescaleIntensity(sitkImage, 0, 1)
-
-    for i in range(imageSize[2]):
-        fig, ax = plt.subplots(figsize=(6, 6))
-        contour_overlaid_image = sitk.LabelMapContourOverlay(
-            sitk.Cast(sitkLabels[:, :, i], sitk.sitkLabelUInt8),
-            sitkImage[:, :, i],
-            opacity=1,
-            contourThickness=[4, 4],
-            dilationRadius=[3, 3]
-        )
-
-        arr = sitk.GetArrayFromImage(contour_overlaid_image)
-        ax.imshow(arr, interpolation='none', origin='lower')
-        ax.axis('off')
-
-        fig.canvas.draw()
-        frame = np.frombuffer(fig.canvas.tostring_rgb(), dtype='uint8')
-        frame = frame.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-        frames.append(frame)
-        plt.close(fig)
-
-    imageio.mimsave(output_path, frames, duration=0.1)
-    print(f"GIF saved to {output_path}")
-
-
-# Función para cargar archivos .mhd
-def load_segmentations_mhd(folder):
-    segmentations = {}
-    for root, _, files in os.walk(folder):  # ahora recorre TODO
-        for file in files:
-            # busca archivos de segmentación con la extensión que estés usando
-            if file.endswith(extensionImages) and "_segmentation" in file:
-                filepath = os.path.join(root, file)
-                try:
-                    img = sitk.ReadImage(filepath)
-                    arr = sitk.GetArrayFromImage(img)  # (Z, Y, X)
-                    subject_name = os.path.basename(root)
-                    key = f"{subject_name}_{os.path.splitext(os.path.splitext(file)[0])[0]}"
-                    segmentations[key] = arr
-                except Exception as e:
-                    print(f"Error al leer {filepath}: {e}")
-    print(f"Total de segmentaciones encontradas: {len(segmentations)}")
-    return segmentations
-
-
-#FUNCIONES PARA IMAGENES DE TEJIDOS Y DE GRASA SUBCUTANEA:
-#FUNCION BODY MASK DESDE INPHASE
-def GetBodyMaskFromInPhaseDixon(inPhaseImage, vectorRadius = (2,2,2)):
-    kernel = sitk.sitkBall
-    otsuImage = sitk.OtsuMultipleThresholds(inPhaseImage, 4, 0, 128, # 4 classes and 128 bins
-                                            False)  # 5 Classes, itk, doesn't coun't the background as a class, so we use 4 in the input parameters.
-    # Open the mask to remove connected regions
-    background = sitk.BinaryMorphologicalOpening(sitk.Equal(otsuImage, 0), vectorRadius, kernel)
-    background = sitk.BinaryDilate(background, vectorRadius, kernel)
-    bodyMask = sitk.Not(background)
-    bodyMask.CopyInformation(inPhaseImage)
-    # Fill holes:
-    #bodyMask = sitk.BinaryFillhole(bodyMask, False)
-    # Fill holes in 2D (to avoid holes coming from bottom and going up):
-    bodyMask = BinaryFillHolePerSlice(bodyMask)
-    return bodyMask
-
-
-#FUNCION BODY MASK DESDE FAT
-def GetBodyMaskFromFatDixonImage(fatImage, vectorRadius = (2,2,2), minObjectSizeInSkin = 500):
-    kernel = sitk.sitkBall
-    otsuImage = sitk.OtsuMultipleThresholds(fatImage, 1, 0, 128, # 1 classes and 128 bins
-                                            False)  # 2 Classes, itk, doesn't coun't the background as a class, so we use 1 in the input parameters.
-    # Open the mask to remove connected regions, mianly motion artefacts outside the body
-    fatMask = sitk.BinaryMorphologicalOpening(sitk.Equal(otsuImage, 1), vectorRadius, kernel)
-    # Remove small objects:
-    connectedFilter = sitk.ConnectedComponentImageFilter()
-    connectedFilter.FullyConnectedOff()
-    relabelComponentFilter = sitk.RelabelComponentImageFilter()
-    relabelComponentFilter.SetMinimumObjectSize(minObjectSizeInSkin)
-    sliceFatObjects = relabelComponentFilter.Execute(
-        connectedFilter.Execute(fatMask))  # RelabelComponent sort its by size.
-    fatMask = sliceFatObjects > 0  # Assumes that can be two large objetcts at most (for each leg)
-
-    fatMask = sitk.BinaryDilate(fatMask, vectorRadius)
-    bodyMask = fatMask
-    # Go through all the slices:
-    for j in range(0, fatMask.GetSize()[2]):
-        sliceFat = fatMask[:, :, j]
-        ndaSliceFatMask = sitk.GetArrayFromImage(sliceFat)
-        ndaSliceFatMask = convex_hull_image(ndaSliceFatMask)
-        sliceFatConvexHull = sitk.GetImageFromArray(ndaSliceFatMask.astype('uint8'))
-        sliceFatConvexHull.CopyInformation(sliceFat)
-        # Now paste the slice in the output:
-        sliceBody = sitk.JoinSeries(sliceFatConvexHull)  # Needs to be a 3D image
-        bodyMask = sitk.Paste(bodyMask, sliceBody, sliceBody.GetSize(), destinationIndex=[0, 0, j])
-    bodyMask = sitk.BinaryDilate(bodyMask, vectorRadius)
-    return bodyMask
-
-
-#FUNCION CALCULO TEJIDO ADIPOSO SUBCUTANEO (Toma la imagen de la función anterior porque tiene que usar las etiquetas 3)
-# gets the skin fat from a dixon segmented image, which consists of dixonSegmentedImage (0=air, 1=muscle, 2=muscle/fat,
-# 3=fat)
-def GetSkinFatFromTissueSegmentedImageUsingConvexHullPerSlice(dixonSegmentedImage, minObjectSizeInMuscle = 500, minObjectSizeInSkin = 500):
-    # Inital skin image:
-    skinFat = dixonSegmentedImage == 3
-    # Body image:
-    bodyMask = dixonSegmentedImage > 0
-    # Create a mask for other tissue:
-    notFatMask = sitk.And(bodyMask, (dixonSegmentedImage < 3))
-    notFatMask = sitk.BinaryMorphologicalOpening(notFatMask, 3)
-    #Filter to process the slices:
-    connectedFilter = sitk.ConnectedComponentImageFilter()
-    connectedFilter.FullyConnectedOff()
-    relabelComponentFilterMuscle = sitk.RelabelComponentImageFilter()
-    relabelComponentFilterMuscle.SetMinimumObjectSize(minObjectSizeInMuscle)
-    relabelComponentFilterSkin = sitk.RelabelComponentImageFilter()
-    relabelComponentFilterSkin.SetMinimumObjectSize(minObjectSizeInSkin)
-    # Go through all the slices:
-    for j in range(0, skinFat.GetSize()[2]):
-        sliceFat = skinFat[:, :, j]
-        sliceNotFat = notFatMask[:, :, j]
-        # Remove external objects:
-        sliceFatEroded = sitk.BinaryMorphologicalOpening(sliceFat, 5)
-        ndaSliceFatMask = sitk.GetArrayFromImage(sliceFatEroded)
-        ndaSliceFatMask = convex_hull_image(ndaSliceFatMask)
-        sliceFatConvexHull = sitk.GetImageFromArray(ndaSliceFatMask.astype('uint8'))
-        sliceFatConvexHull.CopyInformation(sliceFat)
-        #sliceNotFat = sitk.BinaryErode(sliceNotFat, 3)
-
-        # Get the largest connected component:
-        sliceNotFat = sitk.And(sliceNotFat, sliceFatConvexHull) # To remove fake object in the outer region of the body due to coil artefacts.
-        sliceNotFatObjects = relabelComponentFilterMuscle.Execute(
-            connectedFilter.Execute(sliceNotFat))  # RelabelComponent sort its by size.
-        sliceNotFat = sliceNotFatObjects > 0 # sitk.And(sliceNotFatObjects > 0, sliceNotFatObjects < 3) # Assumes that can be two large objetcts at most (for each leg)
-        # Dilate to return to the original size:
-        sliceNotFat = sitk.BinaryDilate(sliceNotFat, 3)  # dilate to recover original size
-
-        # Now apply the convex hull:
-        ndaNotFatMask = sitk.GetArrayFromImage(sliceNotFat)
-        ndaNotFatMask = convex_hull_image(ndaNotFatMask)
-        sliceNotFat = sitk.GetImageFromArray(ndaNotFatMask.astype('uint8'))
-        sliceNotFat.CopyInformation(sliceFat)
-        sliceFat = sitk.And(sliceFat, sitk.Not(sliceNotFat))
-        # Leave the objects larger than minSize for the skin fat:
-        sliceFat = relabelComponentFilterSkin.Execute(
-            connectedFilter.Execute(sliceFat))
-        #sliceFat = sitk.Cast(sliceFat, sitk.sitkUInt8)
-        sliceFat = sliceFat > 0
-        # Now paste the slice in the output:
-        sliceFat = sitk.JoinSeries(sliceFat)  # Needs to be a 3D image
-        skinFat = sitk.Paste(skinFat, sliceFat, sliceFat.GetSize(), destinationIndex=[0, 0, j])
-    skinFat = sitk.BinaryDilate(skinFat, 3)
-    return skinFat
-
-
-#FUNCION RELLENAR AGUJEROS POR CORTE
-# Auxiliary function that fill hole in an image but per each slice:
-def BinaryFillHolePerSlice(input):
-    output = input
-    for j in range(0, input.GetSize()[2]):
-        slice = input[:,:,j]
-        slice = sitk.BinaryFillhole(slice, False)
-        # Now paste the slice in the output:
-        slice = sitk.JoinSeries(slice) # Needs tobe a 3D image
-        output = sitk.Paste(output, slice, slice.GetSize(), destinationIndex=[0, 0, j])
-    return output
-
-# Función para encontrar y cargar segmentaciones de tejidos
-def load_tissue_segmentations(folder):
-    segmentations = {}
-    for root, _, files in os.walk(folder):  # Recorrer todas las subcarpetas
-        print(f"Explorando carpeta: {root}")  # Para depuración
-        for file in files:
-            if file.endswith("_tissue_segmented.mhd"):  # Corrige el sufijo según los archivos
-                filepath = os.path.join(root, file)
-                print(f"Archivo encontrado: {filepath}")  # Para depuración
-                try:
-                    # Leer la imagen con SimpleITK
-                    image = sitk.ReadImage(filepath)
-                    array = sitk.GetArrayFromImage(image)  # Array 3D
-                    # Usar la carpeta del sujeto como parte del identificador
-                    subject_name = os.path.basename(root)
-                    key = f"{subject_name}_{file.replace('_tissue_segmented.mhd', '')}"
-                    key = key.lstrip('_')  # Elimina el guion bajo al principio si existe
-                    segmentations[key] = array
-                except Exception as e:
-                    print(f"Error al leer {filepath}: {e}")
-    print(f"Total de archivos encontrados: {len(segmentations)}")
-    return segmentations
-
-def write_vol_ff_simple_csv(output_csv_path, volumes_lumbar, ffs_lumbar,
-                            volumes_pelvis, ffs_pelvis,
-                            skinfat_total=None, skinfat_pelvis=None,
-                            subject_name="NA"):
-    volumes_all = {}
-    for k, v in volumes_lumbar.items():
-        volumes_all[f"Lumbar_{k}"] = v
-    for k, v in volumes_pelvis.items():
-        volumes_all[f"Pelvis_{k}"] = v
-
-    ffs_all = {}
-    for k, v in ffs_lumbar.items():
-        ffs_all[f"Lumbar_{k}"] = v
-    for k, v in ffs_pelvis.items():
-        ffs_all[f"Pelvis_{k}"] = v
-
-    # Agregar extras (si existen)
-    if skinfat_total is not None:
-        volumes_all["skinFat_total"] = skinfat_total
-    if skinfat_pelvis is not None:
-        volumes_all["skinFat_pelvis"] = skinfat_pelvis
-
-    # ---------- 2) Armar headers y fila ----------
-    headers = (
-        ["Subject"]
-        + [f"Vol {k}" for k in volumes_all.keys()]
-        + [f"FF {k}" for k in ffs_all.keys()]
-    )
-
-    new_row = [subject_name] \
-        + [volumes_all[k] for k in volumes_all.keys()] \
-        + [ffs_all[k] for k in ffs_all.keys()]
-
-    # ---------- 3) Escribir / actualizar CSV ----------
-    import csv, os
-
-    if not os.path.isfile(output_csv_path):
-        # Crear archivo nuevo
-        with open(output_csv_path, mode="w", newline="") as csv_file:
-            writer = csv.writer(csv_file)
-            writer.writerow(headers)
-            writer.writerow(new_row)
-    else:
-        # Leer archivo existente
-        with open(output_csv_path, mode="r", newline="") as csv_file:
-            reader = list(csv.reader(csv_file))
-            headers_existing = reader[0]
-            rows = reader[1:]
-
-        # Si el sujeto ya existe, reemplazar fila
-        updated = False
-        for i, row in enumerate(rows):
-            if row[0] == subject_name:
-                rows[i] = new_row
-                updated = True
-                break
-        if not updated:
-            rows.append(new_row)
-
-        # Reescribir archivo completo
-        with open(output_csv_path, mode="w", newline="") as csv_file:
-            writer = csv.writer(csv_file)
-            writer.writerow(headers_existing)
-            writer.writerows(rows)
 
 # --------------------------- CONFIG PATHS  ---------------------------
 input_root = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifty_output/'
@@ -429,8 +93,8 @@ glutealModel.load_state_dict(torch.load(gluteal_model_path, map_location=device)
 
 # --------------------------- PROCESS EACH VOLUNTEER ---------------------------
 
-for idx, row in coords_df.iterrows():
-#for idx, row in coords_df.iloc[0:1].iterrows():
+#for idx, row in coords_df.iterrows():
+for idx, row in coords_df.iloc[0:1].iterrows():
     inPhaseImageLumbar, fatImageLumbar, waterImageLumbar = None, None, None
     inPhaseImagePelvis, fatImagePelvis, waterImagePelvis = None, None, None
     ffLumbar, ffPelvis = None, None
@@ -513,6 +177,18 @@ for idx, row in coords_df.iterrows():
         os.path.join(outputPathThisSubject, f"{subject}_bodyMask{extensionImages}"),
         True
     )
+
+    # --- GIF de BodyMask ---
+    image_path = os.path.join(input_folder, f"{subject}_in_dixon_concatenated.nii.gz")
+    mask_path = os.path.join(outputPathThisSubject, f"{subject}_bodyMask{extensionImages}")
+    gif_output = os.path.join(outputPathThisSubject, f"{subject}_bodyMask_overlay.gif")
+
+    sitkImage = sitk.ReadImage(image_path)
+    sitkMask = sitk.ReadImage(mask_path)
+    sitkMask.CopyInformation(sitkImage)  # asegurar mismo espacio
+
+    create_segmentation_overlay_animated_gif(sitkImage, sitkMask, gif_output)
+
 
     # 3) Subcutaneous fat mask (using convex hull, slice by slice)
     skinFat = DixonTissueSegmentation.GetSkinFatFromTissueSegmentedImageUsingConvexHullPerSlice(segmentedImage)
@@ -944,10 +620,3 @@ for idx, row in coords_df.iterrows():
         skinfat_total=skinFat_total_vol,
         skinfat_pelvis=skinFat_pelvis_vol,
         subject_name=subject)
-
-    # --- CSV this suject ---
-    #write_vol_ff_simple_csv(os.path.join(outputPathThisSubject, "volumes_and_ffs.csv"),volumes, fat_fraction_means, subject)
-
-    # --- CSV global  ---
-    #write_vol_ff_simple_csv(os.path.join(outputPath, "all_subjects_volumes_and_ffs.csv"),volumes, fat_fraction_means, subject)
-

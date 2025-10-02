@@ -14,11 +14,11 @@ from utils.utils import multilabel, maxProb, apply_bias_correction, FilterUnconn
 input_root = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifty_output/'
 output_root = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/segmentations/'
 os.makedirs(output_root, exist_ok=True)
-coord_csv = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/slices_cortes_anatomicos.csv'
-reference_path_gluteus = '/home/german/lower-body-muscle-qMRI-pipeline/data/reference_images/gluteus_reference.nii.gz'
-reference_path_lumbar = '/home/german/lower-body-muscle-qMRI-pipeline/data/reference_images/lumbar_spine_reference.nii.gz'
-gluteus_model_path = '/home/german/lower-body-muscle-qMRI-pipeline/models/gluteus_model.pt'
-lumbar_model_path = '/home/german/lower-body-muscle-qMRI-pipeline/models/lumbar_model.pt'
+coord_csv = '../data/mri_info.csv'
+reference_path_gluteus = '../data/reference_images/gluteus_reference.nii.gz'
+reference_path_lumbar = '../data/reference_images/lumbar_spine_reference.nii.gz'
+gluteus_model_path = '../models/gluteus_model.pt'
+lumbar_model_path = '../models/lumbar_model.pt'
 
 # --------------------------- LOAD COORDINATES AND IMAGES---------------------------
 coords_df = pd.read_csv(coord_csv)
