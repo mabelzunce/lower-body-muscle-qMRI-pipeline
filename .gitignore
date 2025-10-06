@@ -12,4 +12,5 @@ src/segmentation/IterationInfo.0.R3.txt
 src/segmentation/transform.txt
 src/segmentation/TransformParameters.0.txt
 src/segmentation/TransformParameters.0.txt
-src/utils/__pycache__/utils.cpython-310.pyc
+src/utils/__pycache__/*
+src/segmentation/__pycache__/*
