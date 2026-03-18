@@ -14,3 +14,4 @@ src/segmentation/TransformParameters.0.txt
 src/segmentation/TransformParameters.0.txt
 src/utils/__pycache__/*
 src/segmentation/__pycache__/*
+src/segmentation/__pycache__/unet_3d.cpython-310.pyc
