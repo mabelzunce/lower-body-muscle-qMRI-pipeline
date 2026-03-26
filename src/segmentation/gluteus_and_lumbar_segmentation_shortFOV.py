@@ -13,24 +13,24 @@ dixon_types = ['in', 'opp', 'f', 'w']
 dixon_output_tag = ['I', 'O', 'F', 'W']
 
 # --------------------------- CONFIG PATHS  ---------------------------
-input_root = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifty_output/'
-outputPath = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/segmentations/'
-output_pelvis_path = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifti_pelvis/'
-output_lumbar_path = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifti_lumbar/'
+input_root = '/home/martin/data_imaging/Muscle/data_sarcopenia_tx/nifti_output/'
+outputPath = '/home/martin/data_imaging/Muscle/data_sarcopenia_tx/segmentations/'
+output_pelvis_path = '/home/martin/data_imaging/Muscle/data_sarcopenia_tx/nifti_pelvis/'
+output_lumbar_path = '/home/martin/data_imaging/Muscle/data_sarcopenia_tx/nifti_lumbar/'
 os.makedirs(outputPath, exist_ok=True)
 os.makedirs(output_pelvis_path, exist_ok=True)
 os.makedirs(output_lumbar_path, exist_ok=True)
-coord_csv = '/home/german/lower-body-muscle-qMRI-pipeline/data/mri_info.csv'
+coord_csv = '/home/martin/data_imaging/Muscle/data_sarcopenia_tx/mri_info.csv'
 coords_df = pd.read_csv(coord_csv)
 
 # Modelos
-lumbar_model_path  = "/home/german/lower-body-muscle-qMRI-pipeline/models/lumbarspine_unet3d_20230626_191618_173_best_fit.pt"
-gluteal_model_path = "/home/german/lower-body-muscle-qMRI-pipeline/models/gluteal_unet3d_20250807_110716_123_best_fit.pt"
+lumbar_model_path  = "../../models/lumbarspine_unet3d_20230626_191618_173_best_fit.pt"
+gluteal_model_path = "../../models/gluteal_unet3d_20250807_110716_123_best_fit.pt"
 
 # Imágenes de referencia
-lumbar_reference_path  = "/data/MuscleSegmentation/Data/LumbarSpine3D/ResampledData/C00001.mhd"
+lumbar_reference_path  = "../../data/reference_images/lumbar_spine_reference.nii.gz"
 #lumbar_reference_path  = '/home/german/lower-body-muscle-qMRI-pipeline/data/reference_images/lumbar_spine_reference.nii.gz'
-gluteus_reference_path = "/home/german/lower-body-muscle-qMRI-pipeline/data/reference_images/pelvis_reference.nii.gz"
+gluteus_reference_path = "../../data/reference_images/pelvis_reference.nii.gz"
 
 # CONFIGURATION:
 device_to_use = 'cuda' #'cpu'
@@ -48,7 +48,7 @@ i = 0
 
 # REGISTRATION PARAMETER FILES:
 similarityMetricForReg = 'NMI' #NMI Metric
-parameterFilesPath = '/data/MuscleSegmentation/Data/Elastix/' #Parameters path
+parameterFilesPath = '../../data/elastix/' #Parameters path
 paramFileRigid = 'Parameters_Rigid_' + similarityMetricForReg
 paramFileAffine = 'Parameters_Affine_' + similarityMetricForReg
 
@@ -202,8 +202,8 @@ glutealModel.load_state_dict(torch.load(gluteal_model_path, map_location=device)
 
 # --------------------------- PROCESS EACH VOLUNTEER ---------------------------
 
-#for idx, row in coords_df.iterrows():
-for idx, row in coords_df.iloc[27:31].iterrows():
+for idx, row in coords_df.iterrows():
+#for idx, row in coords_df.iloc[27:31].iterrows():
     inPhaseImageLumbar, fatImageLumbar, waterImageLumbar = None, None, None
     inPhaseImagePelvis, fatImagePelvis, waterImagePelvis = None, None, None
     ffLumbar, ffPelvis = None, None

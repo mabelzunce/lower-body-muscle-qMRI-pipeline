@@ -12,14 +12,14 @@ from utils import apply_bias_correction
 
 
 # --------------------------- CONFIG PATHS ---------------------------
-input_root = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifty_output/'
-output_root = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/segmentations/'
-output_pelvis_path = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/segmentations//nifti_pelvis/'
-output_lumbar_path = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/segmentations//nifti_lumbar/'
+input_root = '/home/martin/data_imaging/Muscle/data_sarcopenia_tx/nifti_output/'
+output_root = '/home/martin/data_imaging/Muscle/data_sarcopenia_tx/segmentations/'
+output_pelvis_path = '/home/martin/data_imaging/Muscle/data_sarcopenia_tx/nifti_pelvis/'
+output_lumbar_path = '/home/martin/data_imaging/Muscle/data_sarcopenia_tx/nifti_lumbar/'
 os.makedirs(output_root, exist_ok=True)
 os.makedirs(output_pelvis_path, exist_ok=True)
 os.makedirs(output_lumbar_path, exist_ok=True)
-coord_csv = '/home/german/lower-body-muscle-qMRI-pipeline/data'
+coord_csv = '../../data/mri_info.csv'
 reference_path_gluteus = '/home/martin/data_imaging/Muscle/GlutealSegmentations/PelvisFOV/ManualSegmentations/MhdRegisteredDownsampled/ID00002.mhd'
 reference_path_lumbar = '../../data/reference_images/lumbar_spine_reference.nii.gz'
 gluteus_model_path = '/home/martin/data/UNSAM/Muscle/repoMuscleSegmentation/Data/GlutesPelvis3D/model/unet_20250807_110716_123_best_fit.pt'
@@ -41,14 +41,16 @@ multilabelNum = 8
 print("Models loaded.\n")
 
 # --------------------------- PROCESS EACH VOLUNTEER ---------------------------
-for idx, row in coords_df.iterrows():
-#for idx, row in coords_df.iloc[7:8].iterrows():
+#for idx, row in coords_df.iterrows():
+indices = [26,29,33]
+coords_df = [coords_df.iloc[i] for i in indices]
+for idx, row in enumerate(coords_df):
     volunteer_id = row['ID']
     outputPathThisSubject = os.path.join(output_root, volunteer_id )
     os.makedirs(outputPathThisSubject, exist_ok=True)
-    trochanter = int(row['Trocánter menor'])
-    iliac_crest = int(row['Cresta iliaca'])
-    vertebra_L1 = int(row['Vértebra L1'])
+    trochanter = int(row['Lesser Trochanter'])
+    iliac_crest = int(row['Iliac Crest'])
+    vertebra_L1 = int(row['L1'])
     print(f"\n=== Processing volunteer: {volunteer_id} ===\nTLesser trochanter: {trochanter}\nTop Iliac Crest: {iliac_crest}\nL1: {vertebra_L1}")
 
     # --------------------------- LOAD IMAGE ---------------------------
