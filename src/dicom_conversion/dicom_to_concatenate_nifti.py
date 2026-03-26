@@ -202,7 +202,7 @@ if concatenate_niftis:
     concatenar_niftis_en_grupos(
         niftiOtuputPath,
         apply_bias_correction=False,
-        voluntarios_seleccionados=["S0039"]
+        voluntarios_seleccionados=["S0044","S0048"]
     )
 
 # Fat Fraction calculation

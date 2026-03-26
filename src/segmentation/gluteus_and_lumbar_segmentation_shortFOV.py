@@ -8,7 +8,8 @@ from PIL import Image
 from skimage.morphology import convex_hull_image
 from unet_3d import Unet
 sys.path.append(os.path.join(os.path.dirname(__file__), "../utils"))
-from utils import ApplyBiasCorrection, create_segmentation_overlay_animated_gif, apply_bias_correction, multilabel, maxProb, FilterUnconnectedRegions, write_vol_ff_simple_csv
+from utils.utils import ApplyBiasCorrection, create_segmentation_overlay_animated_gif, apply_bias_correction, multilabel, maxProb, FilterUnconnectedRegions, write_vol_ff_simple_csv
+#from utils import ApplyBiasCorrection, create_segmentation_overlay_animated_gif, apply_bias_correction, multilabel, maxProb, FilterUnconnectedRegions, write_vol_ff_simple_csv
 dixon_types = ['in', 'opp', 'f', 'w']
 dixon_output_tag = ['I', 'O', 'F', 'W']
 
@@ -203,7 +204,7 @@ glutealModel.load_state_dict(torch.load(gluteal_model_path, map_location=device)
 # --------------------------- PROCESS EACH VOLUNTEER ---------------------------
 
 #for idx, row in coords_df.iterrows():
-for idx, row in coords_df.iloc[27:31].iterrows():
+for idx, row in coords_df.iloc[39:40].iterrows():
     inPhaseImageLumbar, fatImageLumbar, waterImageLumbar = None, None, None
     inPhaseImagePelvis, fatImagePelvis, waterImagePelvis = None, None, None
     ffLumbar, ffPelvis = None, None

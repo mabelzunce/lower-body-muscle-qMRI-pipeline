@@ -695,104 +695,60 @@ def write_vol_ff_simple_csv(output_csv_path, volumes_lumbar, ffs_lumbar,
                             volumes_pelvis, ffs_pelvis,
                             skinfat_total=None, skinfat_pelvis=None,
                             subject_name="NA",
-                            volumes_short=None, ffs_short=None):  # 🔹 nuevos opcionales
-    import csv, os
+                            volumes_short=None, ffs_short=None):
 
-    # ---------- 1) Preparar diccionarios ----------
-    volumes_all = {}
-    ffs_all = {}
+    import os
+    import pandas as pd
 
-    for k, v in volumes_lumbar.items():
-        volumes_all[f"Lumbar_{k}"] = v
-    for k, v in volumes_pelvis.items():
-        volumes_all[f"Pelvis_{k}"] = v
-    if volumes_short is not None:
-        for k, v in volumes_short.items():
-            volumes_all[f"ShortFOV_{k}"] = v
+    new_row = {}
+    new_row["Subject"] = subject_name
 
-    for k, v in ffs_lumbar.items():
-        ffs_all[f"Lumbar_{k}"] = v
-    for k, v in ffs_pelvis.items():
-        ffs_all[f"Pelvis_{k}"] = v
-    if ffs_short is not None:
-        for k, v in ffs_short.items():
-            ffs_all[f"ShortFOV_{k}"] = v
+    # ----- Volúmenes -----
+    for i in range(1, 9):
+        new_row[f"Vol Lumbar_{i}"] = volumes_lumbar.get(i, "")
+        new_row[f"Vol Pelvis_{i}"] = volumes_pelvis.get(i, "")
 
-    # ---------- 2) Agregar extras ----------
-    if skinfat_total is not None:
-        volumes_all["skinFat_total"] = skinfat_total
-    if skinfat_pelvis is not None:
-        volumes_all["skinFat_pelvis"] = skinfat_pelvis
+    new_row["Vol skinFat_total"] = skinfat_total if skinfat_total is not None else ""
+    new_row["Vol skinFat_pelvis"] = skinfat_pelvis if skinfat_pelvis is not None else ""
 
-    # ---------- 3) Definir orden fijo de columnas ----------
-    headers = ["Subject"]
+    for i in range(1, 9):
+        new_row[f"Vol ShortFOV_{i}"] = volumes_short.get(i, "") if volumes_short else ""
 
-    # Volúmenes (orden fijo)
-    headers += [f"Vol Lumbar_{i}" for i in range(1, 9)]
-    headers += [f"Vol Pelvis_{i}" for i in range(1, 9)]
-    headers += ["Vol skinFat_total", "Vol skinFat_pelvis"]
-    headers += [f"Vol ShortFOV_{i}" for i in range(1, 9)]
+    # ----- FF -----
+    for i in range(1, 9):
+        new_row[f"FF Lumbar_{i}"] = ffs_lumbar.get(i, "")
+        new_row[f"FF Pelvis_{i}"] = ffs_pelvis.get(i, "")
 
-    # Fat Fractions (orden fijo)
-    headers += [f"FF Lumbar_{i}" for i in range(1, 9)]
-    headers += [f"FF Pelvis_{i}" for i in range(1, 9)]
-    headers += [f"FF ShortFOV_{i}" for i in range(1, 9)]
+    for i in range(1, 9):
+        new_row[f"FF ShortFOV_{i}"] = ffs_short.get(i, "") if ffs_short else ""
 
-    # ---------- 4) Construir la fila ordenada ----------
-    new_row = [subject_name]
+    new_row_df = pd.DataFrame([new_row])
 
-    # Volúmenes
-    new_row += [volumes_lumbar.get(i, "") for i in range(1, 9)]
-    new_row += [volumes_pelvis.get(i, "") for i in range(1, 9)]
-    new_row += [skinfat_total if skinfat_total is not None else "",
-                skinfat_pelvis if skinfat_pelvis is not None else ""]
-    new_row += [volumes_short.get(i, "") for i in range(1, 9)] if volumes_short else [""] * 8
+    # Si no existe → crear
+    if not os.path.exists(output_csv_path):
+        new_row_df.to_csv(output_csv_path, index=False)
+        return
 
-    # Fat Fractions
-    new_row += [ffs_lumbar.get(i, "") for i in range(1, 9)]
-    new_row += [ffs_pelvis.get(i, "") for i in range(1, 9)]
-    new_row += [ffs_short.get(i, "") for i in range(1, 9)] if ffs_short else [""] * 8
+    df = pd.read_csv(output_csv_path)
 
-    # ---------- 5) Escribir / actualizar CSV ----------
-    if not os.path.isfile(output_csv_path):
-        # Crear archivo nuevo
-        with open(output_csv_path, mode="w", newline="") as csv_file:
-            writer = csv.writer(csv_file)
-            writer.writerow(headers)
-            writer.writerow(new_row)
+    # Agregar columnas faltantes al CSV
+    for col in new_row_df.columns:
+        if col not in df.columns:
+            df[col] = ""
+
+    # Asegurar que la nueva fila tenga todas las columnas
+    for col in df.columns:
+        if col not in new_row_df.columns:
+            new_row_df[col] = ""
+
+    new_row_df = new_row_df[df.columns]
+
+    # 🔹 ACTUALIZAR SIN BORRAR OTRAS COLUMNAS
+    if subject_name in df["Subject"].values:
+        idx = df.index[df["Subject"] == subject_name][0]
+        for col in new_row_df.columns:
+            df.at[idx, col] = new_row_df.iloc[0][col]
     else:
-        # Leer archivo existente
-        with open(output_csv_path, mode="r", newline="") as csv_file:
-            reader = list(csv.reader(csv_file))
-            headers_existing = reader[0]
-            rows = reader[1:]
+        df = pd.concat([df, new_row_df], ignore_index=True)
 
-        # 🔹 Si faltan columnas (por versiones previas), las agregamos al final
-        for h in headers:
-            if h not in headers_existing:
-                headers_existing.append(h)
-                for r in rows:
-                    r.append("")
-
-        # Asegurar longitud de fila
-        while len(new_row) < len(headers_existing):
-            new_row.append("")
-
-        # Si el sujeto ya existe, reemplazar su fila
-        updated = False
-        for i, row in enumerate(rows):
-            if row[0] == subject_name:
-                rows[i] = new_row
-                updated = True
-                break
-        if not updated:
-            rows.append(new_row)
-
-        # Reescribir archivo completo
-        with open(output_csv_path, mode="w", newline="") as csv_file:
-            writer = csv.writer(csv_file)
-            writer.writerow(headers_existing)
-            writer.writerows(rows)
-
-
-
+    df.to_csv(output_csv_path, index=False)

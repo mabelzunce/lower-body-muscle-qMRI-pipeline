@@ -1,37 +1,63 @@
 import SimpleITK as sitk
 
-fixed = sitk.ReadImage("/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifty_output/S0014/pelvis_crop.nii.gz")
-moving = sitk.ReadImage("/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifty_output/S0014/29_t2starmap_fl2d_tra_mbh.nii.gz")
+#fixed_path = "/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifti_pelvis/S0043/S0043_I.nii.gz"
+#moving_path = "/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifty_output/S0043/31_t2_images.nii.gz"
+moving_path = "/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifti_pelvis/S0043/S0043_I.nii.gz"
+fixed_path = "/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifty_output/S0043/31_t2_images.nii.gz"
+moving_out_path = "/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifty_output/S0043/3S0043_I_registered.nii.gz"
 
-# Convertir a mismo tipo
-fixed = sitk.Cast(fixed, sitk.sitkFloat32)
-moving = sitk.Cast(moving, sitk.sitkFloat32)
+REGISTER_LABEL = True
+label_path = "/data/MuscleSegmentation/Data/Gluteus&Lumbar/segmentations/S0043/S0043_pelvis_segmentation.mhd"
+label_out_path = "/data/MuscleSegmentation/Data/Gluteus&Lumbar/segmentations/S0043/S0043_pelvis_segmentation_registered.mhd"
 
-# Si la moving es 4D → convertir a 3D
+# --------------------------- LOAD ---------------------------
+fixed = sitk.Cast(sitk.ReadImage(fixed_path), sitk.sitkFloat32)
+moving = sitk.Cast(sitk.ReadImage(moving_path), sitk.sitkFloat32)
+
+print("FIXED origin:", fixed.GetOrigin())
+print("MOVING origin:", moving.GetOrigin())
+
+print("FIXED spacing:", fixed.GetSpacing())
+print("MOVING spacing:", moving.GetSpacing())
+
+print("FIXED direction:", fixed.GetDirection())
+print("MOVING direction:", moving.GetDirection())
+
 if moving.GetDimension() == 4:
-    print("⚠️ moving es 4D, extrayendo el primer volumen...")
     size = list(moving.GetSize())
     size[3] = 0
-    moving = sitk.Extract(moving, size=size, index=[0,0,0,0])
+    moving = sitk.Extract(moving, size=size, index=[0, 0, 0, 0])
 
-label = sitk.ReadImage("/data/MuscleSegmentation/Data/Gluteus&Lumbar/segmentations/S0014/S0014_pelvis_segmentation.mhd")
+if REGISTER_LABEL:
+    label = sitk.ReadImage(label_path)
 
-# --------------------------- REGISTRO ---------------------------
+# --------------------------- REGISTRATION ---------------------------
 registration = sitk.ImageRegistrationMethod()
-registration.SetMetricAsMeanSquares()
+#registration.SetMetricAsMeanSquares()
 registration.SetOptimizerAsRegularStepGradientDescent(
-    learningRate=2.0, minStep=1e-4, numberOfIterations=100
+    learningRate=2.0,
+    minStep=1e-4,
+    numberOfIterations=100
 )
 registration.SetInterpolator(sitk.sitkLinear)
 
-# TRANSFORMACIÓN INICIAL
-initial_transform = sitk.TranslationTransform(fixed.GetDimension())
+initial_transform = sitk.CenteredTransformInitializer(
+    fixed,
+    moving,
+    sitk.Euler3DTransform(),
+    sitk.CenteredTransformInitializerFilter.GEOMETRY
+)
+
 registration.SetInitialTransform(initial_transform, inPlace=False)
 
-print("🔄 Ejecutando registro...")
+registration.SetMetricAsMattesMutualInformation(50)
+registration.SetMetricSamplingStrategy(registration.RANDOM)
+registration.SetMetricSamplingPercentage(0.2)
+registration.SetOptimizerScalesFromPhysicalShift()
+
 transform = registration.Execute(fixed, moving)
 
-# Registrar la imagen moving
+# --------------------------- RESAMPLE IMAGE ---------------------------
 moving_reg = sitk.Resample(
     moving,
     fixed,
@@ -40,23 +66,17 @@ moving_reg = sitk.Resample(
     0.0,
     moving.GetPixelID()
 )
-sitk.WriteImage(
-    moving_reg,
-    "/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifty_output/S0014/t2star_registered.nii.gz"
-)
-print("✔ moving registrada guardada.")
 
-# --------------------------- REGISTRAR MÁSCARA ---------------------------
-label_reg = sitk.Resample(
-    label,
-    fixed,
-    transform,
-    sitk.sitkNearestNeighbor,
-    0,
-    label.GetPixelID()
-)
-sitk.WriteImage(
-    label_reg,
-    "/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifty_output/S0014/label_registered.nii.gz"
-)
-print("✔ máscara registrada guardada.")
+sitk.WriteImage(moving_reg, moving_out_path)
+
+# --------------------------- RESAMPLE LABEL ---------------------------
+if REGISTER_LABEL:
+    label_reg = sitk.Resample(
+        label,
+        fixed,
+        transform,
+        sitk.sitkNearestNeighbor,
+        0,
+        label.GetPixelID()
+    )
+    sitk.WriteImage(label_reg, label_out_path)
