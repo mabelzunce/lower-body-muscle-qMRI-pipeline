@@ -16,12 +16,13 @@ import SimpleITK as sitk
 convert_dicom = False  # Set to False if you want to skip DICOM conversion
 concatenate_niftis = True  # Set to False if you want to skip concatenation
 calculate_fat_fraction = False  # Set to False if you want to skip FF calculation
-
+rewrite_converted = False  # If True, will re-convert DICOMs even if output exists
+rewrite_concatenated = True  # If True, will re-concatenate even if output exists
 # Datapath
 #dicomDataPath = "/home/martin/data_imaging/Muscle/data_sarcopenia_tx/dicom/"
 #niftiOtuputPath = "/home/martin/data_imaging/Muscle/data_sarcopenia_tx/nifti_output/"
-dicomDataPath = "/data/MuscleSegmentation/Data/Gluteus&Lumbar/dicom2"
-niftiOtuputPath = "/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifty_output"
+dicomDataPath = "/home/martin/data_imaging/Muscle/data_sarcopenia_tx/dicom/"
+niftiOtuputPath = "/home/martin/data_imaging/Muscle/data_sarcopenia_tx/nifti_output/"
 
 if not os.path.exists(niftiOtuputPath):
     os.makedirs(niftiOtuputPath, exist_ok=True)
@@ -77,10 +78,18 @@ def convertir_todos_los_voluntarios(dicom_base_folder, carpeta_salida_base):
         codigo_simple = nombre_voluntario.split("_")[0]
         carpeta_salida = os.path.join(carpeta_salida_base, codigo_simple)
 
-        os.makedirs(carpeta_salida, exist_ok=True)
-
-        dicom2nifti.convert_directory(carpeta_dicom, carpeta_salida,
-                              compression=True, reorient=True)
+        # Create output dir and convert only if it doesn't exist, or if rewrite_converted is True
+        if not os.path.exists(carpeta_salida): 
+            os.makedirs(carpeta_salida, exist_ok=True)
+            dicom2nifti.convert_directory(carpeta_dicom, carpeta_salida,
+                          compression=True, reorient=True)
+        else:
+            if rewrite_converted:
+                print(f"Rewriting existing output for {codigo_simple}")
+                dicom2nifti.convert_directory(carpeta_dicom, carpeta_salida,
+                                compression=True, reorient=True)
+            else:
+                print(f"Skipping conversion for {codigo_simple} (output exists)")
 
 
 def concatenar_niftis_en_grupos(carpeta_salida_base, apply_bias_correction=False, voluntarios_seleccionados=None):
@@ -114,6 +123,10 @@ def concatenar_niftis_en_grupos(carpeta_salida_base, apply_bias_correction=False
             grupos.setdefault(key, []).append((archivo, numero))
 
         for nombre_grupo, lista_archivos in grupos.items():
+            output_file = os.path.join(ruta_voluntario, f"{nombre_grupo}_dixon_concatenated.nii.gz")
+            if os.path.exists(output_file) and not rewrite_concatenated:
+                print(f"Skipping concatenation for {nombre_grupo} (output exists)")
+                continue
             if len(lista_archivos) < 2:
                 archivos_unicos.extend([x[0] for x in lista_archivos])
                 continue
@@ -147,8 +160,7 @@ def concatenar_niftis_en_grupos(carpeta_salida_base, apply_bias_correction=False
             concatenado = np.concatenate(datos, axis=2)
             print(f"Concatenated shape: {concatenado.shape}")
 
-            nifti_concat = nib.Nifti1Image(concatenado, afines[-1])
-            output_file = os.path.join(ruta_voluntario, f"{nombre_grupo}_dixon_concatenated.nii.gz")
+            nifti_concat = nib.Nifti1Image(concatenado, afines[-1])            
             nib.save(nifti_concat, output_file)
             print(f"✅ Concatenated saved: {output_file}")
 
@@ -202,7 +214,7 @@ if concatenate_niftis:
     concatenar_niftis_en_grupos(
         niftiOtuputPath,
         apply_bias_correction=False,
-        voluntarios_seleccionados=["S0044","S0048"]
+        voluntarios_seleccionados=["S0032", "S0037", "S0041"]  # Example: ["001", "002"] to process only those volunteers
     )
 
 # Fat Fraction calculation
