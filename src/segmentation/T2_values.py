@@ -4,7 +4,7 @@ import pandas as pd
 import os, sys, csv
 import re
 sys.path.append(os.path.join(os.path.dirname(__file__), "../utils"))
-from utils import ApplyBiasCorrection, create_segmentation_overlay_animated_gif
+from utils.utils import ApplyBiasCorrection, create_segmentation_overlay_animated_gif
 
 # --- Configuración ---
 base_dir_masks = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/segmentations'
@@ -24,7 +24,9 @@ for subj in subjects:
         continue
 
     # --- Buscar mapa T2* ---
-    maps = [f for f in os.listdir(map_dir) if f.endswith('_t2star_images.nii.gz')]
+    maps = [f for f in os.listdir(map_dir)
+        if f.lower().endswith('images.nii.gz')
+           and 't2' in f.lower()]
     if not maps:
         print(f"⚠️ No se encontró mapa T2* en {subj}")
         continue
