@@ -13,11 +13,11 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../utils"))
 from utils import apply_bias_correction_2
 import SimpleITK as sitk
 # Configuration
-convert_dicom = False  # Set to False if you want to skip DICOM conversion
+convert_dicom = True  # Set to False if you want to skip DICOM conversion
 concatenate_niftis = True  # Set to False if you want to skip concatenation
-calculate_fat_fraction = False  # Set to False if you want to skip FF calculation
+calculate_fat_fraction = True  # Set to False if you want to skip FF calculation
 rewrite_converted = False  # If True, will re-convert DICOMs even if output exists
-rewrite_concatenated = True  # If True, will re-concatenate even if output exists
+rewrite_concatenated = False  # If True, will re-concatenate even if output exists
 # Datapath
 #dicomDataPath = "/home/martin/data_imaging/Muscle/data_sarcopenia_tx/dicom/"
 #niftiOtuputPath = "/home/martin/data_imaging/Muscle/data_sarcopenia_tx/nifti_output/"
@@ -213,8 +213,8 @@ if convert_dicom:
 if concatenate_niftis:
     concatenar_niftis_en_grupos(
         niftiOtuputPath,
-        apply_bias_correction=False,
-        voluntarios_seleccionados=["S0032", "S0037", "S0041"]  # Example: ["001", "002"] to process only those volunteers
+        apply_bias_correction=True,
+        voluntarios_seleccionados=[]  # Example: ["001", "002"] to process only those volunteers
     )
 
 # Fat Fraction calculation

@@ -6,42 +6,64 @@ import multiprocessing
 
 def apply_bias_correction_2(image: np.ndarray, shrink_factor=4) -> np.ndarray:
     """
-    Applies an N4 bias correction filter to an image in a numpy array.
+    Applies an N4 bias correction filter to a numpy array image.
 
     Parameters:
         image (np.ndarray): Input image as a numpy array.
+        shrink_factor (int | tuple[int, ...]): Downsampling factor per axis.
+            A scalar applies the same shrink factor to all axes; a tuple/list must
+            match the image dimensionality.
 
     Returns:
-        np.ndarray: Bias-corrected image.
+        np.ndarray: Bias-corrected image at full resolution.
     """
-    
-    # Convert the numpy array to a SimpleITK image
+    image = np.asarray(image, dtype=np.float32)
     sitk_image = sitk.GetImageFromArray(image)
-    sitk_image_lowres = sitk_image #In cas shrinking is appleid
-    # ---- (optional but recommended) build a mask ----
+
+    # Build the mask used by N4; values are 0/1 for the foreground/background mask.
     mask = sitk.OtsuThreshold(sitk_image, 0, 1, 200)
 
-    # Shrink the image:
-    if shrink_factor > 1:
-        sitk_image_lowres = sitk.Shrink(sitk_image, [shrink_factor] * sitk_image.GetDimension())
-        mask = sitk.Shrink(
-            mask, [shrink_factor] * mask.GetDimension()
-        )  
+    # Validate and normalize the shrink factors. SimpleITK expects one value per
+    # dimension, not a tuple nested inside a list.
+    if isinstance(shrink_factor, (tuple, list, np.ndarray)):
+        shrink_factors = [int(v) for v in shrink_factor]
+        if len(shrink_factors) != sitk_image.GetDimension():
+            raise ValueError(
+                "shrink_factor tuple/list length must match the image dimensionality: "
+                f"got {len(shrink_factors)} for a {sitk_image.GetDimension()}D image"
+            )
+        if any(v <= 0 for v in shrink_factors):
+            raise ValueError(f"shrink factors must be positive; got {shrink_factors}")
+        if all(v == 1 for v in shrink_factors):
+            shrink_factors = None
+    elif isinstance(shrink_factor, (int, np.integer)):
+        if int(shrink_factor) <= 1:
+            shrink_factors = None
+        else:
+            shrink_factors = [int(shrink_factor)] * sitk_image.GetDimension()
+    else:
+        raise TypeError(
+            "shrink_factor must be an int or a tuple/list of ints matching the image dimensionality"
+        )
+
+    sitk_image_lowres = sitk_image
+    if shrink_factors is not None:
+        sitk_image_lowres = sitk.Shrink(sitk_image, shrink_factors)
+        mask = sitk.Shrink(mask, shrink_factors)
 
     # Initialize the N4 bias field correction filter
     n4_filter = sitk.N4BiasFieldCorrectionImageFilter()
     n4_filter.SetNumberOfThreads(multiprocessing.cpu_count())
-    # Apply the filter
-    corrected_image = n4_filter.Execute(sitk_image_lowres, mask)
 
+    # Apply the filter to the low-resolution image and recover the bias field at
+    # full resolution.
+    n4_filter.Execute(sitk_image_lowres, mask)
     log_bias_field = n4_filter.GetLogBiasFieldAsImage(sitk_image)
-
     corrected_image_full_resolution = sitk.Cast(sitk_image, sitk.sitkFloat32) / sitk.Exp(log_bias_field)
 
     # Convert the corrected image back to a numpy array
     corrected_array = sitk.GetArrayFromImage(corrected_image_full_resolution)
-
-    return corrected_array
+    return corrected_array.astype(np.float32)
 
 # BIAS FIELD CORRECTION
 def apply_bias_correction(inputImage, shrinkFactor = (1,1,1)):
