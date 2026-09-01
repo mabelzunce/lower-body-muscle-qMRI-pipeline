@@ -1,3 +1,5 @@
+import os
+import torch
 import os, sys, csv
 import numpy as np, matplotlib.pyplot as plt
 import pandas as pd
@@ -8,19 +10,19 @@ from PIL import Image
 from skimage.morphology import convex_hull_image
 from unet_3d import Unet
 sys.path.append(os.path.join(os.path.dirname(__file__), "../utils"))
-from utils import ApplyBiasCorrection, create_segmentation_overlay_animated_gif, apply_bias_correction, multilabel, maxProb, FilterUnconnectedRegions, write_vol_ff_simple_csv
+from utils.utils import ApplyBiasCorrection, create_segmentation_overlay_animated_gif, apply_bias_correction, multilabel, maxProb, FilterUnconnectedRegions, write_vol_ff_simple_csv
 dixon_types = ['in', 'opp', 'f', 'w']
 dixon_output_tag = ['I', 'O', 'F', 'W']
 
 # --------------------------- CONFIG PATHS  ---------------------------
-input_root = '/home/martin/data_imaging/Muscle/data_sarcopenia_tx/nifti_output/'
-outputPath = '/home/martin/data_imaging/Muscle/data_sarcopenia_tx/segmentations/'
-output_pelvis_path = '/home/martin/data_imaging/Muscle/data_sarcopenia_tx/nifti_pelvis/'
-output_lumbar_path = '/home/martin/data_imaging/Muscle/data_sarcopenia_tx/nifti_lumbar/'
+input_root = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifty_output/'
+outputPath = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/segmentations/'
+output_pelvis_path = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifti_pelvis/'
+output_lumbar_path = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifti_lumbar/'
 os.makedirs(outputPath, exist_ok=True)
 os.makedirs(output_pelvis_path, exist_ok=True)
 os.makedirs(output_lumbar_path, exist_ok=True)
-coord_csv = '/home/martin/data_imaging/Muscle/data_sarcopenia_tx/mri_info.csv'
+coord_csv = '/home/german/lower-body-muscle-qMRI-pipeline/data/mri_info.csv'
 coords_df = pd.read_csv(coord_csv)
 
 # Modelos
@@ -28,13 +30,15 @@ lumbar_model_path  = "../../models/lumbarspine_unet3d_20230626_191618_173_best_f
 gluteal_model_path = "../../models/gluteal_unet3d_20250807_110716_123_best_fit.pt"
 
 # Imágenes de referencia
-lumbar_reference_path  = "../../data/reference_images/lumbar_spine_reference.nii.gz"
+#lumbar_reference_path  = "../../data/reference_images/lumbar_spine_reference.nii.gz"
+lumbar_reference_path  = "/data/MuscleSegmentation/Data/LumbarSpine3D/ResampledData/C00001.mhd"
 #lumbar_reference_path  = '/home/german/lower-body-muscle-qMRI-pipeline/data/reference_images/lumbar_spine_reference.nii.gz'
-gluteus_reference_path = "../../data/reference_images/pelvis_reference.nii.gz"
+#gluteus_reference_path = "../../data/reference_images/pelvis_reference.nii.gz"
+gluteus_reference_path = "/home/german/lower-body-muscle-qMRI-pipeline/data/reference_images/pelvis_reference.nii.gz"
 
 # CONFIGURATION:
 device_to_use = 'cuda' #'cpu'
-preRegistration = True #TRUE: Pre-register using the next image
+preRegistration = True
 dataInSubdirPerSubject = True
 
 imageNames = []
@@ -111,6 +115,7 @@ def segment_region(
         elastixImageFilter.WriteParameterFile(transform[0], f"transform_{region_name}.txt")
     else:
         sitkImageResampled = sitkImage
+    print("[DEBUG LUMBAR] after registration:", sitkImageResampled.GetSize())
 
     # 4️⃣ Segmentación con el modelo correspondiente
     image_np = sitk.GetArrayFromImage(sitkImageResampled).astype(np.float32)
@@ -200,10 +205,16 @@ lumbarModel.load_state_dict(torch.load(lumbar_model_path, map_location=device))
 glutealModel = Unet(1, multilabelNum).to(device)
 glutealModel.load_state_dict(torch.load(gluteal_model_path, map_location=device))
 
-# --------------------------- PROCESS EACH VOLUNTEER ---------------------------
+def to_int_or_none(x):
+    return None if pd.isna(x) else int(x)
 
-for idx, row in coords_df.iterrows():
-#for idx, row in coords_df.iloc[27:31].iterrows():
+# --------------------------- PROCESS EACH VOLUNTEER ---------------------------
+ids_to_process = ["S0074"]
+subset = coords_df[coords_df['ID'].isin(ids_to_process)]
+print("Voluntarios a procesar:",subset)
+for idx, row in subset.iterrows():
+    print(f"Index {idx} -> {row['ID']}")
+#for idx, row in coords_df.iterrows():
     inPhaseImageLumbar, fatImageLumbar, waterImageLumbar = None, None, None
     inPhaseImagePelvis, fatImagePelvis, waterImagePelvis = None, None, None
     ffLumbar, ffPelvis = None, None
@@ -211,53 +222,101 @@ for idx, row in coords_df.iterrows():
     subject = volunteer_id
     outputPathThisSubject = os.path.join(outputPath, volunteer_id )
     os.makedirs(outputPathThisSubject, exist_ok=True)
-    trochanter = int(row['Lesser Trochanter'])
-    iliac_crest = int(row['Iliac Crest'])
-    vertebra_L1 = int(row['L1'])
-    print(f"\n=== Processing volunteer: {volunteer_id} ===\nTLesser trochanter: {trochanter}\nTop Iliac Crest: {iliac_crest}\nL1: {vertebra_L1}")
+    trochanter = to_int_or_none(row['Lesser Trochanter'])
+    iliac_crest = to_int_or_none(row['Iliac Crest'])
+    vertebra_L1 = to_int_or_none(row['L1'])
 
-    # --------------------------- LOAD IMAGE ---------------------------
+    trochanter_short = to_int_or_none(
+        row['Lesser Trochanter Short']) if 'Lesser Trochanter Short' in row.index else None
+    iliac_short = to_int_or_none(row['Iliac Crest Short']) if 'Iliac Crest Short' in row.index else None
+
+    do_pelvis = trochanter is not None and iliac_crest is not None
+    do_lumbar = trochanter is not None and vertebra_L1 is not None
+    do_short = trochanter_short is not None and iliac_short is not None
+
+    if not do_pelvis:
+        print(f"[WARN] {subject}: faltan coordenadas para pelvis -> se saltea pelvis")
+
+    if not do_lumbar:
+        print(f"[WARN] {subject}: faltan coordenadas para lumbar -> se saltea lumbar")
+
+    if not do_short:
+        print(f"[WARN] {subject}: faltan coordenadas para short FOV -> se saltea short FOV")
+
+    volumes = {i: np.nan for i in range(1, multilabelNum + 1)}
+    fat_fraction_means = {i: np.nan for i in range(1, multilabelNum + 1)}
+
+    volumes_pelvis = {i: np.nan for i in range(1, multilabelNum + 1)}
+    fat_fraction_means_pelvis = {i: np.nan for i in range(1, multilabelNum + 1)}
+
+    volumes_bilateral = {i: np.nan for i in range(1, multilabelNum + 1)}
+    fat_fraction_means_bilateral = {i: np.nan for i in range(1, multilabelNum + 1)}
+
+    skinFat_total_vol = np.nan
+    skinFat_pelvis_vol = np.nan
+
+# --------------------------- LOAD IMAGE ---------------------------
     input_folder = os.path.join(input_root, volunteer_id)
     output_pelvis_this_volunteer_path = os.path.join(output_pelvis_path, volunteer_id)
     output_lumbar_this_volunteer_path = os.path.join(output_lumbar_path, volunteer_id)
     os.makedirs(output_pelvis_this_volunteer_path, exist_ok=True)
     os.makedirs(output_lumbar_this_volunteer_path, exist_ok=True)
     images_dixon = {}
+    print(f"[CROP] {subject} | pelvis: {trochanter}:{iliac_crest} | lumbar: {trochanter}:{vertebra_L1} | short: {trochanter_short}:{iliac_short}")
     for dixon_tag in dixon_types:
         input_file_tag = os.path.join(input_folder, f"{volunteer_id}_{dixon_tag}_dixon_concatenated.nii.gz")
         if os.path.exists(input_file_tag):
             images_dixon[dixon_tag] = sitk.ReadImage(input_file_tag)
+            dixon_index = dixon_types.index(dixon_tag)
             # Apply bias correction if needed
             if dixon_tag == 'in':
                 print(f"Applying bias correction to {input_file_tag}")
                 images_dixon[dixon_tag] = apply_bias_correction(images_dixon[dixon_tag], shrinkFactor=(8, 8, 4))
-            # todo: get the field and apply it to the other images
+                #print("[DEBUG MAIN] Bias correction finished and returned")
+             # todo: get the field and apply it to the other images
         else:
             print(f"Warning: {input_file_tag} not found.")
+            continue
 
         # --------------------------- CROP PELVIS REGION ---------------------------
 
-        sitk_pelvis_image = images_dixon[dixon_tag][:,:, int(trochanter):int(iliac_crest)]
-        dixon_index = dixon_types.index(dixon_tag)
-        sitk.WriteImage(sitk_pelvis_image, f"{output_pelvis_this_volunteer_path}/{volunteer_id}_{dixon_output_tag[dixon_index]}.nii.gz")
-        if dixon_tag == 'in':
-            inPhaseImagePelvis = sitk_pelvis_image
-        elif dixon_tag == 'f':
-            fatImagePelvis = sitk_pelvis_image
-        elif dixon_tag == 'w':
-            waterImagePelvis = sitk_pelvis_image
-        elif dixon_tag == 'opp':
-            outOfPhaseImagePelvis = sitk_pelvis_image
+        if do_pelvis:
+            sitk_pelvis_image = images_dixon[dixon_tag][:, :, trochanter:iliac_crest]
+            sitk.WriteImage(
+                sitk_pelvis_image,
+                f"{output_pelvis_this_volunteer_path}/{volunteer_id}_{dixon_output_tag[dixon_index]}.nii.gz"
+            )
+
+            if dixon_tag == 'in':
+                inPhaseImagePelvis = sitk_pelvis_image
+            elif dixon_tag == 'f':
+                fatImagePelvis = sitk_pelvis_image
+            elif dixon_tag == 'w':
+                waterImagePelvis = sitk_pelvis_image
+            elif dixon_tag == 'opp':
+                outOfPhaseImagePelvis = sitk_pelvis_image
+
+
+            sitk.WriteImage(sitk_pelvis_image,
+                            f"{output_pelvis_this_volunteer_path}/{volunteer_id}_{dixon_output_tag[dixon_index]}.nii.gz")
 
         # --------------------------- CROP LUMBAR REGION ---------------------------
-        sitk_lumbar_image = images_dixon[dixon_tag][:,:, int(trochanter):int(vertebra_L1)]
-        sitk.WriteImage(sitk_lumbar_image, f"{output_lumbar_this_volunteer_path}/{volunteer_id}_{dixon_output_tag[dixon_index]}.nii.gz")
-        if dixon_tag == 'in':
-            inPhaseImageLumbar = sitk_lumbar_image
-        elif dixon_tag == 'f':
-            fatImageLumbar = sitk_lumbar_image
-        elif dixon_tag == 'w':
-            waterImageLumbar = sitk_lumbar_image
+        if do_lumbar:
+            sitk_lumbar_image = images_dixon[dixon_tag][:, :, trochanter:vertebra_L1]
+            sitk.WriteImage(
+                sitk_lumbar_image,
+                f"{output_lumbar_this_volunteer_path}/{volunteer_id}_{dixon_output_tag[dixon_index]}.nii.gz"
+            )
+
+            if dixon_tag == 'in':
+                inPhaseImageLumbar = sitk_lumbar_image
+            elif dixon_tag == 'f':
+                fatImageLumbar = sitk_lumbar_image
+            elif dixon_tag == 'w':
+                waterImageLumbar = sitk_lumbar_image
+
+            sitk.WriteImage(sitk_lumbar_image, f"{output_lumbar_this_volunteer_path}/{volunteer_id}_{dixon_output_tag[dixon_index]}.nii.gz")
+
         # --------------------------- END OF CROP --------------------------
 
     # -------------------- TISSUE / SUBCUTANEOUS FAT SEGMENTATION --------------------
@@ -347,8 +406,6 @@ for idx, row in coords_df.iterrows():
     sitkMask.CopyInformation(sitkImage)
     create_segmentation_overlay_animated_gif(sitkImage, sitkMask, gif_output)
 
-    # Generate GIF
-
     # Paths dinámicos para este voluntario
     image_path = os.path.join(input_folder, f"{subject}_in_dixon_concatenated.nii.gz")
     mask_path = os.path.join(outputPathThisSubject, f"{subject}_skinFat{extensionImages}")
@@ -402,233 +459,234 @@ for idx, row in coords_df.iterrows():
     else:
         print(f"[WARN] Missing W and/or F pelvis images for {subject} — skipping pelvis FF.")
 
-    print(f"Lumbar segmentation")
+    if do_lumbar and (inPhaseImageLumbar is not None or fatImageLumbar is not None):
+        print(f"Lumbar segmentation")
 
-    # Input image for the segmentation:
-    if inPhaseImageLumbar != 0:
-        sitkImage = inPhaseImageLumbar
-    else:
-        # use fat image that is similar:
-        sitkImage = fatImageLumbar
-
-    # Get the spacial dimensions
-    spacing = sitkImage.GetSpacing()  # Tuple (spacing_x, spacing_y, spacing_z)
-    print(spacing)
-    # Apply Bias Field Correction
-    shrinkFactor = (4, 4, 2)
-    sitkImage = ApplyBiasCorrection(sitkImage, shrinkFactor=shrinkFactor)
-    # Obtains the name of the file (without the complete path and divide name and extension)
-    filename_no_ext = subject
-    file_extension = ".nii.gz"
-    new_filename = f"{filename_no_ext}_biasFieldCorrection{file_extension}"
-    outputBiasFilename = os.path.join(outputPathThisSubject, new_filename)
-    sitk.WriteImage(sitkImage, outputBiasFilename, True)
-
-    if preRegistration:
-        # elastixImageFilter filter
-        elastixImageFilter = sitk.ElastixImageFilter() #Create the object
-        # Register image to reference data
-        elastixImageFilter.SetFixedImage(referenceImage_lumbar) #Defines reference image
-        elastixImageFilter.SetMovingImage(sitkImage) #Defines moving image
-        elastixImageFilter.SetParameterMap(parameterMapVector)
-        elastixImageFilter.SetLogToConsole(False)
-        elastixImageFilter.Execute()
-        transform = elastixImageFilter.GetParameterMap()
-        sitkImageResampled = elastixImageFilter.GetResultImage() #Result image from the register
-        # Write transformed image:
-        elastixImageFilter.WriteParameterFile(transform[0], 'transform.txt')
-    else:
-        sitkImageResampled = sitkImage
-    # Convert to float and register it:
-    image = sitk.GetArrayFromImage(sitkImageResampled).astype(np.float32)
-    image = np.expand_dims(image, axis=0)
-
-    # Run the segmentation through the model:
-    torch.cuda.empty_cache()
-    with torch.no_grad(): #SEGMENTATION:
-        input = torch.from_numpy(image).to(device)
-        output = lumbarModel(input.unsqueeze(0))
-        output = torch.sigmoid(output.cpu().to(torch.float32))
-        outputs = maxProb(output, multilabelNum)
-        output = ((output > 0.5) * 1)
-        output = multilabel(output.detach().numpy())
-    output = FilterUnconnectedRegions(output.squeeze(0), multilabelNum, sitkImageResampled)
-
-    if preRegistration:
-        # Resample to original space:
-        elastixImageFilter = sitk.ElastixImageFilter()
-        elastixImageFilter.SetInitialTransformParameterFileName('TransformParameters.0.txt')
-        elastixImageFilter.SetFixedImage(sitkImageResampled) # sitkImage
-        elastixImageFilter.SetMovingImage(sitkImageResampled) # sitkImage
-        elastixImageFilter.LogToConsoleOff()
-        # rigid_pm = affine_parameter_map()
-        rigid_pm = sitk.GetDefaultParameterMap("affine")
-        rigid_pm['MaximumNumberOfIterations'] = ("1000",) # By default 256, but it's not enough
-        # rigid_pm["AutomaticTransformInitialization"] = "true"
-        # rigid_pm["AutomaticTransformInitializationMethod"] = ["Origins"]
-        elastixImageFilter.SetParameterMap(rigid_pm)
-        elastixImageFilter.SetParameter('HowToCombineTransforms', 'Compose')
-        elastixImageFilter.SetParameter('Metric', 'DisplacementMagnitudePenalty')
-
-        elastixImageFilter.Execute()
-
-        Tx = elastixImageFilter.GetTransformParameterMap()
-        Tx[0]['InitialTransformParametersFileName'] = ('NoInitialTransform',)
-        Tx[0]['Origin'] = tuple(map(str, sitkImage.GetOrigin()))
-        Tx[0]['Spacing'] = tuple(map(str, sitkImage.GetSpacing()))
-        Tx[0]['Size'] = tuple(map(str, sitkImage.GetSize()))
-        Tx[0]['Direction'] = tuple(map(str, sitkImage.GetDirection()))
-
-        transformixImageFilter = sitk.TransformixImageFilter()
-        transformixImageFilter.SetTransformParameterMap(Tx)
-        transformixImageFilter.SetMovingImage(output)
-        transformixImageFilter.SetLogToConsole(False)
-        transformixImageFilter.SetTransformParameter("FinalBSplineInterpolationOrder", "0")
-        transformixImageFilter.SetTransformParameter("ResultImagePixelType", "unsigned char")
-        transformixImageFilter.Execute()
-        output = sitk.Cast(transformixImageFilter.GetResultImage(), sitk.sitkUInt8)
-
-    # Enforce the same space in the raw image (there was a bug before, without this they match in geometrical space but not in voxel space):
-    output = sitk.Resample(output, sitkImage, sitk.Euler3DTransform(), sitk.sitkNearestNeighbor)
-    output_single_mask = output > 0 #Binary segmentation
-    sitk.WriteImage(output, os.path.join(outputPathThisSubject, subject + '_lumbar_segmentation' + extensionImages), True)
-    sitk.WriteImage(output_single_mask, os.path.join(outputPathThisSubject, subject + '_lumbar_spine_mask' + extensionImages), True) #The binary segmentation will be called 'subject_lumbar_spine_mask.mhd'
-
-    #VOLUME CALCULATION:
-    #Segmentation to array
-    segmentation_array = sitk.GetArrayFromImage(output)
-    num_labels = multilabelNum
-    voxel_volume = np.prod(spacing) #volume (X.Y.Z)
-
-        # Volume dictionary to save the label volumes
-    volumes = {}
-
-    # Iterate over labels
-    for label in range(1, num_labels+1):
-        label_mask = (segmentation_array == label).astype(np.uint8)
-        label_voxels = np.sum(label_mask)
-        label_volume = label_voxels * voxel_volume
-        volumes[label] = label_volume       # Save the data on the dictionary
-    #Add them to the list
-    volume_all_subjects.append(volumes)
-    # Print the volume of all the labels:
-    print("\nVolumes:")
-    for label, volume in volumes.items():
-        print(f"Muscle {label}: {volume} mm³")
-
-    # WRITE AN ANIMATED GIF WITH THE SEGMENTATION
-    create_segmentation_overlay_animated_gif(sitkImage, output, os.path.join(outputPathThisSubject, f"{subject}_lumbar_segmentation_check.gif"))
-
-    #FF CALCULATION:
-
-    # Images to numpy arrays
-    fatfraction_array = sitk.GetArrayFromImage(ffLumbar)
-    fat_fraction_means = {}
-    fat_fraction_means_pelvis = {}
-
-    for label in range(1, multilabelNum+1):
-        # Mask for actual label
-        label_mask = (segmentation_array == label)
-
-        # Check for true values
-        if np.any(label_mask):
-            # Get the FF values linked to the mask
-            fat_values = fatfraction_array[label_mask]
-
-            # Calculate mean value for the label
-            fat_fraction_means[label] = np.mean(fat_values)
+        # Input image for the segmentation:
+        if inPhaseImageLumbar is not None:
+            sitkImage = inPhaseImageLumbar
         else:
-            fat_fraction_means[label] = None  # No values for that label
+            sitkImage = fatImageLumbar
 
-    # Add them to the list:
-    fat_fraction_all_subjects.append(fat_fraction_means)
+        # Get the spacial dimensions
+        spacing = sitkImage.GetSpacing()  # Tuple (spacing_x, spacing_y, spacing_z)
 
-    # Print the results
-    print("\nFFs:")
-    #for label in range(0,9):
-    for label, fat_mean in fat_fraction_means.items():
-        if fat_mean is not None:
-            print(f"Muscle {label}: {fat_mean:.4f}")
+        # Apply Bias Field Correction
+        shrinkFactor = (4, 4, 2)
+        sitkImage = ApplyBiasCorrection(sitkImage, shrinkFactor=shrinkFactor)
+
+        # Obtains the name of the file (without the complete path and divide name and extension)
+        filename_no_ext = subject
+        file_extension = ".nii.gz"
+        new_filename = f"{filename_no_ext}_biasFieldCorrection{file_extension}"
+        outputBiasFilename = os.path.join(outputPathThisSubject, new_filename)
+        sitk.WriteImage(sitkImage, outputBiasFilename, True)
+
+        if preRegistration:
+            print("[DEBUG LUMBAR] before registration:", sitkImage.GetSize())
+            print("[DEBUG LUMBAR] refimage:", referenceImage_lumbar.GetSize())
+
+            elastixImageFilter = sitk.ElastixImageFilter()
+            elastixImageFilter.SetFixedImage(referenceImage_lumbar)
+            elastixImageFilter.SetMovingImage(sitkImage)
+            elastixImageFilter.SetParameterMap(parameterMapVector)
+            elastixImageFilter.SetLogToConsole(False)
+            elastixImageFilter.Execute()
+            transform = elastixImageFilter.GetParameterMap()
+            sitkImageResampled = elastixImageFilter.GetResultImage()
+            print("[DEBUG LUMBAR] after registration:", sitkImageResampled.GetSize())
+            elastixImageFilter.WriteParameterFile(transform[0], 'transform.txt')
         else:
-            print(f"Muscle {label}: Sin valores válidos")
+            sitkImageResampled = sitkImage
+
+        # Convert to float and register it:
+        image = sitk.GetArrayFromImage(sitkImageResampled).astype(np.float32)
+        image = np.expand_dims(image, axis=0)
+
+        # Run the segmentation through the model:
+        torch.cuda.empty_cache()
+        with torch.no_grad():
+            input = torch.from_numpy(image).to(device)
+            output = lumbarModel(input.unsqueeze(0))
+            output = torch.sigmoid(output.cpu().to(torch.float32))
+            outputs = maxProb(output, multilabelNum)
+            output = ((output > 0.5) * 1)
+            output = multilabel(output.detach().numpy())
+
+        output = FilterUnconnectedRegions(output.squeeze(0), multilabelNum, sitkImageResampled)
+        print("[DEBUG LUMBAR] before registration:", sitkImage.GetSize())
+
+        if preRegistration:
+            elastixImageFilter = sitk.ElastixImageFilter()
+            elastixImageFilter.SetInitialTransformParameterFileName('TransformParameters.0.txt')
+            elastixImageFilter.SetFixedImage(sitkImageResampled)
+            elastixImageFilter.SetMovingImage(sitkImageResampled)
+            elastixImageFilter.LogToConsoleOff()
+
+            rigid_pm = sitk.GetDefaultParameterMap("affine")
+            rigid_pm['MaximumNumberOfIterations'] = ("1000",)
+            elastixImageFilter.SetParameterMap(rigid_pm)
+            elastixImageFilter.SetParameter('HowToCombineTransforms', 'Compose')
+            elastixImageFilter.SetParameter('Metric', 'DisplacementMagnitudePenalty')
+            elastixImageFilter.Execute()
+
+            Tx = elastixImageFilter.GetTransformParameterMap()
+            Tx[0]['InitialTransformParametersFileName'] = ('NoInitialTransform',)
+            Tx[0]['Origin'] = tuple(map(str, sitkImage.GetOrigin()))
+            Tx[0]['Spacing'] = tuple(map(str, sitkImage.GetSpacing()))
+            Tx[0]['Size'] = tuple(map(str, sitkImage.GetSize()))
+            Tx[0]['Direction'] = tuple(map(str, sitkImage.GetDirection()))
+
+            transformixImageFilter = sitk.TransformixImageFilter()
+            transformixImageFilter.SetTransformParameterMap(Tx)
+            transformixImageFilter.SetMovingImage(output)
+            transformixImageFilter.SetLogToConsole(False)
+            transformixImageFilter.SetTransformParameter("FinalBSplineInterpolationOrder", "0")
+            transformixImageFilter.SetTransformParameter("ResultImagePixelType", "unsigned char")
+            transformixImageFilter.Execute()
+            output = sitk.Cast(transformixImageFilter.GetResultImage(), sitk.sitkUInt8)
+
+        # Enforce the same space in the raw image
+        output = sitk.Resample(output, sitkImage, sitk.Euler3DTransform(), sitk.sitkNearestNeighbor)
+        output_single_mask = output > 0
+
+        sitk.WriteImage(output, os.path.join(outputPathThisSubject, subject + '_lumbar_segmentation' + extensionImages),
+                        True)
+        sitk.WriteImage(output_single_mask,
+                        os.path.join(outputPathThisSubject, subject + '_lumbar_spine_mask' + extensionImages), True)
+
+        # VOLUME CALCULATION:
+        segmentation_array = sitk.GetArrayFromImage(output)
+        num_labels = multilabelNum
+        voxel_volume = np.prod(spacing)
+
+        volumes = {}
+        for label in range(1, num_labels + 1):
+            label_mask = (segmentation_array == label).astype(np.uint8)
+            label_voxels = np.sum(label_mask)
+            label_volume = label_voxels * voxel_volume
+            volumes[label] = label_volume
+
+        volume_all_subjects.append(volumes)
+
+        print("\nVolumes:")
+        for label, volume in volumes.items():
+            print(f"Muscle {label}: {volume} mm³")
+
+        create_segmentation_overlay_animated_gif(
+            sitkImage,
+            output,
+            os.path.join(outputPathThisSubject, f"{subject}_lumbar_segmentation_check.gif")
+        )
+
+        # FF CALCULATION:
+        fat_fraction_means = {i: np.nan for i in range(1, multilabelNum + 1)}
+
+        if ffLumbar is not None:
+            fatfraction_array = sitk.GetArrayFromImage(ffLumbar)
+
+            for label in range(1, multilabelNum + 1):
+                label_mask = (segmentation_array == label)
+
+                if np.any(label_mask):
+                    fat_values = fatfraction_array[label_mask]
+                    fat_fraction_means[label] = np.mean(fat_values)
+                else:
+                    fat_fraction_means[label] = np.nan
+        else:
+            print(f"[WARN] No lumbar FF available for {subject}; lumbar FFs set to NaN.")
+
+        fat_fraction_all_subjects.append(fat_fraction_means)
+
+        print("\nFFs:")
+        for label, fat_mean in fat_fraction_means.items():
+            if fat_mean is not None and not np.isnan(fat_mean):
+                print(f"Muscle {label}: {fat_mean:.4f}")
+            else:
+                print(f"Muscle {label}: Sin valores válidos")
+
+    else:
+        print(f"[WARN] Lumbar segmentation skipped for {subject}")
 
     ############     PELVIS   #######################################################
 
-    print(f"Pelvis segmentation")
-    # 1) Imagen de entrada (pelvis)
-    if inPhaseImagePelvis is not None:
-        sitkImagePelvis = inPhaseImagePelvis
+    if do_pelvis and (inPhaseImagePelvis is not None or fatImagePelvis is not None):
+        print(f"Pelvis segmentation")
+        # 1) Imagen de entrada (pelvis)
+        if inPhaseImagePelvis is not None:
+            sitkImagePelvis = inPhaseImagePelvis
+        else:
+            sitkImagePelvis = fatImagePelvis  # fallback
+
+        # 2) Espaciado y bias field correction
+        spacingPelvis = sitkImagePelvis.GetSpacing()
+        print("Pelvis spacing:", spacingPelvis)
+        sitkImagePelvis = ApplyBiasCorrection(sitkImagePelvis, shrinkFactor=(4, 4, 2))
+
+        # Guardar la pelvis corregida (opcional, mismo formato que arriba)
+        pelvis_bias_fname = os.path.join(outputPathThisSubject, f"{subject}_pelvis_biasFieldCorrection.nii.gz")
+        sitk.WriteImage(sitkImagePelvis, pelvis_bias_fname, True)
+
+        # 3) Registro (usar referencia de glúteo)
+        if preRegistration:
+            elastixImageFilter = sitk.ElastixImageFilter()
+            elastixImageFilter.SetFixedImage(referenceImage_gluteus)  # <--- referencia GLÚTEO
+            elastixImageFilter.SetMovingImage(sitkImagePelvis)  # <--- imagen PELVIS
+            elastixImageFilter.SetParameterMap(parameterMapVector)
+            elastixImageFilter.SetLogToConsole(False)
+            elastixImageFilter.Execute()
+            transform = elastixImageFilter.GetParameterMap()
+            sitkImageResampledPelvis = elastixImageFilter.GetResultImage()
+            elastixImageFilter.WriteParameterFile(transform[0], 'transform.txt')
+        else:
+            sitkImageResampledPelvis = sitkImagePelvis
+
+        # 4) Preparar tensor y segmentar con el MODELO DE GLÚTEO
+        imagePelvis = sitk.GetArrayFromImage(sitkImageResampledPelvis).astype(np.float32)
+        imagePelvis = np.expand_dims(imagePelvis, axis=0)
+
+        torch.cuda.empty_cache()
+        with torch.no_grad():
+            input_t = torch.from_numpy(imagePelvis).to(device)
+            outputPelvis = glutealModel(input_t.unsqueeze(0))  # <--- modelo GLÚTEO
+            outputPelvis = torch.sigmoid(outputPelvis.cpu().to(torch.float32))
+            _ = maxProb(outputPelvis, multilabelNum)
+            outputPelvis = ((outputPelvis > 0.5) * 1)
+            outputPelvis = multilabel(outputPelvis.detach().numpy())
+
+        outputPelvis = FilterUnconnectedRegions(outputPelvis.squeeze(0), multilabelNum, sitkImageResampledPelvis)
+
+        # 5) Volver al espacio original de la pelvis (si hubo registro)
+        if preRegistration:
+            elastixImageFilter = sitk.ElastixImageFilter()
+            elastixImageFilter.SetInitialTransformParameterFileName('TransformParameters.0.txt')
+            elastixImageFilter.SetFixedImage(sitkImageResampledPelvis)
+            elastixImageFilter.SetMovingImage(sitkImageResampledPelvis)
+            elastixImageFilter.LogToConsoleOff()
+            rigid_pm = sitk.GetDefaultParameterMap("affine")
+            rigid_pm['MaximumNumberOfIterations'] = ("1000",)
+            elastixImageFilter.SetParameterMap(rigid_pm)
+            elastixImageFilter.SetParameter('HowToCombineTransforms', 'Compose')
+            elastixImageFilter.SetParameter('Metric', 'DisplacementMagnitudePenalty')
+            elastixImageFilter.Execute()
+
+            Tx = elastixImageFilter.GetTransformParameterMap()
+            Tx[0]['InitialTransformParametersFileName'] = ('NoInitialTransform',)
+            Tx[0]['Origin'] = tuple(map(str, sitkImagePelvis.GetOrigin()))
+            Tx[0]['Spacing'] = tuple(map(str, sitkImagePelvis.GetSpacing()))
+            Tx[0]['Size'] = tuple(map(str, sitkImagePelvis.GetSize()))
+            Tx[0]['Direction'] = tuple(map(str, sitkImagePelvis.GetDirection()))
+
+            transformixImageFilter = sitk.TransformixImageFilter()
+            transformixImageFilter.SetTransformParameterMap(Tx)
+            transformixImageFilter.SetMovingImage(outputPelvis)
+            transformixImageFilter.SetLogToConsole(False)
+            transformixImageFilter.SetTransformParameter("FinalBSplineInterpolationOrder", "0")
+            transformixImageFilter.SetTransformParameter("ResultImagePixelType", "unsigned char")
+            transformixImageFilter.Execute()
+            outputPelvis = sitk.Cast(transformixImageFilter.GetResultImage(), sitk.sitkUInt8)
     else:
-        sitkImagePelvis = fatImagePelvis  # fallback
-
-    # 2) Espaciado y bias field correction
-    spacingPelvis = sitkImagePelvis.GetSpacing()
-    print("Pelvis spacing:", spacingPelvis)
-    sitkImagePelvis = ApplyBiasCorrection(sitkImagePelvis, shrinkFactor=(4, 4, 2))
-
-    # Guardar la pelvis corregida (opcional, mismo formato que arriba)
-    pelvis_bias_fname = os.path.join(outputPathThisSubject, f"{subject}_pelvis_biasFieldCorrection.nii.gz")
-    sitk.WriteImage(sitkImagePelvis, pelvis_bias_fname, True)
-
-    # 3) Registro (usar referencia de glúteo)
-    if preRegistration:
-        elastixImageFilter = sitk.ElastixImageFilter()
-        elastixImageFilter.SetFixedImage(referenceImage_gluteus)  # <--- referencia GLÚTEO
-        elastixImageFilter.SetMovingImage(sitkImagePelvis)  # <--- imagen PELVIS
-        elastixImageFilter.SetParameterMap(parameterMapVector)
-        elastixImageFilter.SetLogToConsole(False)
-        elastixImageFilter.Execute()
-        transform = elastixImageFilter.GetParameterMap()
-        sitkImageResampledPelvis = elastixImageFilter.GetResultImage()
-        elastixImageFilter.WriteParameterFile(transform[0], 'transform.txt')
-    else:
-        sitkImageResampledPelvis = sitkImagePelvis
-
-    # 4) Preparar tensor y segmentar con el MODELO DE GLÚTEO
-    imagePelvis = sitk.GetArrayFromImage(sitkImageResampledPelvis).astype(np.float32)
-    imagePelvis = np.expand_dims(imagePelvis, axis=0)
-
-    torch.cuda.empty_cache()
-    with torch.no_grad():
-        input_t = torch.from_numpy(imagePelvis).to(device)
-        outputPelvis = glutealModel(input_t.unsqueeze(0))  # <--- modelo GLÚTEO
-        outputPelvis = torch.sigmoid(outputPelvis.cpu().to(torch.float32))
-        _ = maxProb(outputPelvis, multilabelNum)
-        outputPelvis = ((outputPelvis > 0.5) * 1)
-        outputPelvis = multilabel(outputPelvis.detach().numpy())
-
-    outputPelvis = FilterUnconnectedRegions(outputPelvis.squeeze(0), multilabelNum, sitkImageResampledPelvis)
-
-    # 5) Volver al espacio original de la pelvis (si hubo registro)
-    if preRegistration:
-        elastixImageFilter = sitk.ElastixImageFilter()
-        elastixImageFilter.SetInitialTransformParameterFileName('TransformParameters.0.txt')
-        elastixImageFilter.SetFixedImage(sitkImageResampledPelvis)
-        elastixImageFilter.SetMovingImage(sitkImageResampledPelvis)
-        elastixImageFilter.LogToConsoleOff()
-        rigid_pm = sitk.GetDefaultParameterMap("affine")
-        rigid_pm['MaximumNumberOfIterations'] = ("1000",)
-        elastixImageFilter.SetParameterMap(rigid_pm)
-        elastixImageFilter.SetParameter('HowToCombineTransforms', 'Compose')
-        elastixImageFilter.SetParameter('Metric', 'DisplacementMagnitudePenalty')
-        elastixImageFilter.Execute()
-
-        Tx = elastixImageFilter.GetTransformParameterMap()
-        Tx[0]['InitialTransformParametersFileName'] = ('NoInitialTransform',)
-        Tx[0]['Origin'] = tuple(map(str, sitkImagePelvis.GetOrigin()))
-        Tx[0]['Spacing'] = tuple(map(str, sitkImagePelvis.GetSpacing()))
-        Tx[0]['Size'] = tuple(map(str, sitkImagePelvis.GetSize()))
-        Tx[0]['Direction'] = tuple(map(str, sitkImagePelvis.GetDirection()))
-
-        transformixImageFilter = sitk.TransformixImageFilter()
-        transformixImageFilter.SetTransformParameterMap(Tx)
-        transformixImageFilter.SetMovingImage(outputPelvis)
-        transformixImageFilter.SetLogToConsole(False)
-        transformixImageFilter.SetTransformParameter("FinalBSplineInterpolationOrder", "0")
-        transformixImageFilter.SetTransformParameter("ResultImagePixelType", "unsigned char")
-        transformixImageFilter.Execute()
-        outputPelvis = sitk.Cast(transformixImageFilter.GetResultImage(), sitk.sitkUInt8)
-
+        print(f"[WARN] Pelvis segmentation skipped for {subject}")
     # Asegurar mismo voxel grid que la pelvis original
     outputPelvis = sitk.Resample(outputPelvis, sitkImagePelvis, sitk.Euler3DTransform(), sitk.sitkNearestNeighbor)
     pelvis_single_mask = outputPelvis > 0
@@ -693,7 +751,7 @@ for idx, row in coords_df.iterrows():
     volumes_bilateral = None
     fat_fraction_means_bilateral = None
     bilateral_folder = os.path.join(input_folder, "bilateral")
-    if os.path.isdir(bilateral_folder):
+    if os.path.isdir(bilateral_folder) and do_short:
         print(f"[INFO] Bilateral folder detected for {subject}. Running short-FOV preprocessing...")
 
         bilateral_images = {}
@@ -826,22 +884,25 @@ for idx, row in coords_df.iterrows():
         else:
             print(f"[WARN] No in-phase image found in bilateral folder for {subject}. Skipping.")
 
-    #TOTAL VOLUME:
+    # TOTAL VOLUME:
     single_array = sitk.GetArrayFromImage(output_single_mask)
     num_segmented_voxels = np.sum(single_array)
-    total_volume = num_segmented_voxels * voxel_volume #TOTAL VOLUME FOR THAT SUBJECT
+    total_volume = num_segmented_voxels * voxel_volume  # TOTAL VOLUME FOR THAT SUBJECT
     totalvolume_all_subjects.append(total_volume)
 
-    #MEAN FF:
-    # Apply the mask
-    masked_values = fatfraction_array[single_array > 0]
-    # Calculate the mean ff
-    mean_ff = np.mean(masked_values) #MEAN FF FOR THAT SUBJECT
+    # MEAN FF:
+    if ffLumbar is not None:
+        fatfraction_array = sitk.GetArrayFromImage(ffLumbar)
+        masked_values = fatfraction_array[single_array > 0]
+        mean_ff = np.mean(masked_values) if masked_values.size > 0 else np.nan
+    else:
+        mean_ff = np.nan
+        print(f"[WARN] No lumbar FF available for mean FF in {subject}; mean FF set to NaN.")
+
     meanff_all_subjects.append(mean_ff)
 
-    #Name
+    # Name
     names_subjects.append(subject + "_lumbar")
-
 
     # --- CSV this suject ---
     #    write_vol_ff_simple_csv(
