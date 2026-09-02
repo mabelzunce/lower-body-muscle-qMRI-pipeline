@@ -678,7 +678,7 @@ for idx, row in subset.iterrows():
             elastixImageFilter.Execute()
 
             Tx = elastixImageFilter.GetTransformParameterMap()
-            Tx[0]['InitialTransformParametersFileName'] = ('NoInitialTransform',)
+            Tx[0]['InitialTransformParameterFileName'] = ('NoInitialTransform',)
             Tx[0]['Origin'] = tuple(map(str, sitkImagePelvis.GetOrigin()))
             Tx[0]['Spacing'] = tuple(map(str, sitkImagePelvis.GetSpacing()))
             Tx[0]['Size'] = tuple(map(str, sitkImagePelvis.GetSize()))
