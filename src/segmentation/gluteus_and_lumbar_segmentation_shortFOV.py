@@ -10,19 +10,19 @@ from PIL import Image
 from skimage.morphology import convex_hull_image
 from unet_3d import Unet
 sys.path.append(os.path.join(os.path.dirname(__file__), "../utils"))
-from utils.utils import ApplyBiasCorrection, create_segmentation_overlay_animated_gif, apply_bias_correction, multilabel, maxProb, FilterUnconnectedRegions, write_vol_ff_simple_csv
+from utils import ApplyBiasCorrection, create_segmentation_overlay_animated_gif, apply_bias_correction, multilabel, maxProb, FilterUnconnectedRegions, write_vol_ff_simple_csv
 dixon_types = ['in', 'opp', 'f', 'w']
 dixon_output_tag = ['I', 'O', 'F', 'W']
 
 # --------------------------- CONFIG PATHS  ---------------------------
-input_root = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifty_output/'
-outputPath = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/segmentations/'
-output_pelvis_path = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifti_pelvis/'
-output_lumbar_path = '/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifti_lumbar/'
+input_root = '/home/martin/data_imaging/Muscle/data_sarcopenia_tx/nifti_output/'
+outputPath = '/home/martin/data_imaging/Muscle/data_sarcopenia_tx/segmentations/'
+output_pelvis_path = '/home/martin/data_imaging/Muscle/data_sarcopenia_tx/nifti_pelvis/'
+output_lumbar_path = '/home/martin/data_imaging/Muscle/data_sarcopenia_tx/nifti_lumbar/'
 os.makedirs(outputPath, exist_ok=True)
 os.makedirs(output_pelvis_path, exist_ok=True)
 os.makedirs(output_lumbar_path, exist_ok=True)
-coord_csv = '/home/german/lower-body-muscle-qMRI-pipeline/data/mri_info.csv'
+coord_csv = '../../data/mri_info.csv'
 coords_df = pd.read_csv(coord_csv)
 
 # Modelos
@@ -31,13 +31,14 @@ gluteal_model_path = "../../models/gluteal_unet3d_20250807_110716_123_best_fit.p
 
 # Imágenes de referencia
 #lumbar_reference_path  = "../../data/reference_images/lumbar_spine_reference.nii.gz"
-lumbar_reference_path  = "/data/MuscleSegmentation/Data/LumbarSpine3D/ResampledData/C00001.mhd"
+lumbar_reference_path  = "../../data/reference_images/C00001.mhd"
 #lumbar_reference_path  = '/home/german/lower-body-muscle-qMRI-pipeline/data/reference_images/lumbar_spine_reference.nii.gz'
 #gluteus_reference_path = "../../data/reference_images/pelvis_reference.nii.gz"
-gluteus_reference_path = "/home/german/lower-body-muscle-qMRI-pipeline/data/reference_images/pelvis_reference.nii.gz"
+gluteus_reference_path = "../../data/reference_images/pelvis_reference.nii.gz"
 
 # CONFIGURATION:
 device_to_use = 'cuda' #'cpu'
+gpu_number = 1
 preRegistration = True
 dataInSubdirPerSubject = True
 
@@ -181,9 +182,9 @@ def segment_region(
 device = torch.device(device_to_use) #'cuda' uses the graphic board
 print(device)
 if device.type == 'cuda':
-    t = torch.cuda.get_device_properties(0).total_memory
-    r = torch.cuda.memory_reserved(0)
-    a = torch.cuda.memory_allocated(0)
+    t = torch.cuda.get_device_properties(gpu_number).total_memory
+    r = torch.cuda.memory_reserved(gpu_number)
+    a = torch.cuda.memory_allocated(gpu_number)
     f = r-a  # free inside reserved
     print('Total memory: {0}. Reserved memory: {1}. Allocated memory:{2}. Free memory:{3}.'.format(t,r,a,f))
 
@@ -209,9 +210,14 @@ def to_int_or_none(x):
     return None if pd.isna(x) else int(x)
 
 # --------------------------- PROCESS EACH VOLUNTEER ---------------------------
-ids_to_process = ["S0074"]
-subset = coords_df[coords_df['ID'].isin(ids_to_process)]
-print("Voluntarios a procesar:",subset)
+ids_to_process = []#["S0074"]
+if len(ids_to_process) > 0:
+    subset = coords_df[coords_df['ID'].isin(ids_to_process)]
+    print("Voluntarios a procesar:", subset)
+else:
+    subset = coords_df
+    print("Voluntarios a procesar:", subset)
+
 for idx, row in subset.iterrows():
     print(f"Index {idx} -> {row['ID']}")
 #for idx, row in coords_df.iterrows():
@@ -396,7 +402,7 @@ for idx, row in subset.iterrows():
     )
 
     # Generate GIF
-    image_path = os.path.join("/data/MuscleSegmentation/Data/Gluteus&Lumbar/nifti_pelvis/", f"{subject}", f"{subject}_I.nii.gz")
+    image_path = os.path.join(output_pelvis_path, f"{subject}", f"{subject}_I.nii.gz")
     mask_path = os.path.join(outputPathThisSubject, f"{subject}_pelvis_skinFat{extensionImages}")
     gif_output = os.path.join(outputPathThisSubject, f"{subject}_pelvis_skinFat_overlay.gif")
     # Load image and mask
@@ -531,7 +537,7 @@ for idx, row in subset.iterrows():
             elastixImageFilter.Execute()
 
             Tx = elastixImageFilter.GetTransformParameterMap()
-            Tx[0]['InitialTransformParametersFileName'] = ('NoInitialTransform',)
+            Tx[0]['InitialTransformParameterFileName'] = ('NoInitialTransform',)
             Tx[0]['Origin'] = tuple(map(str, sitkImage.GetOrigin()))
             Tx[0]['Spacing'] = tuple(map(str, sitkImage.GetSpacing()))
             Tx[0]['Size'] = tuple(map(str, sitkImage.GetSize()))
@@ -544,6 +550,7 @@ for idx, row in subset.iterrows():
             transformixImageFilter.SetTransformParameter("FinalBSplineInterpolationOrder", "0")
             transformixImageFilter.SetTransformParameter("ResultImagePixelType", "unsigned char")
             transformixImageFilter.Execute()
+            transformixImageFilter.LogToConsoleOn()
             output = sitk.Cast(transformixImageFilter.GetResultImage(), sitk.sitkUInt8)
 
         # Enforce the same space in the raw image

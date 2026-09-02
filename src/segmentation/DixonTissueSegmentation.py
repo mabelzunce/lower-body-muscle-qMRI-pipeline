@@ -5,6 +5,20 @@ from skimage.morphology import convex_hull_image
 import numpy as np
 import matplotlib.pyplot as plt
 
+
+def _radius_for_image(image, radius):
+    """Return a radius tuple matching the image dimensionality."""
+    if isinstance(radius, int):
+        return (radius,) * image.GetDimension()
+
+    if len(radius) == image.GetDimension():
+        return tuple(int(r) for r in radius)
+
+    if len(radius) == 1:
+        return (int(radius[0]),) * image.GetDimension()
+
+    raise ValueError("Radius must have length 1 or match image dimension")
+
 # Auxiliary function that fill hole in an image but per each slice:
 def BinaryFillHolePerSlice(input):
     output = input
@@ -111,7 +125,7 @@ def GetSkinFatFromTissueSegmentedImage(dixonSegmentedImage, thresholdIterations 
         areaBodyMask = 1e10
         while (numIterDiceDecreasing <= thresholdIterations) and (areaBodyMask>0):
             # Erode:
-            sliceBodyMask = sitk.BinaryErode(sliceBodyMask,3)
+            sliceBodyMask = sitk.BinaryErode(sliceBodyMask, _radius_for_image(sliceBodyMask, 3))
             shapeStatisticFilter.Execute(sliceBodyMask)
             
             if shapeStatisticFilter.GetNumberOfLabels() < 1:
@@ -143,7 +157,7 @@ def GetSkinFatFromTissueSegmentedImageUsingConvexHullPerSlice(dixonSegmentedImag
     bodyMask = dixonSegmentedImage > 0
     # Create a mask for other tissue:
     notFatMask = sitk.And(bodyMask, (dixonSegmentedImage < 3))
-    notFatMask = sitk.BinaryMorphologicalOpening(notFatMask, 3)
+    notFatMask = sitk.BinaryMorphologicalOpening(notFatMask, _radius_for_image(notFatMask, 3))
     #Filter to process the slices:
     connectedFilter = sitk.ConnectedComponentImageFilter()
     connectedFilter.FullyConnectedOff()
@@ -156,7 +170,7 @@ def GetSkinFatFromTissueSegmentedImageUsingConvexHullPerSlice(dixonSegmentedImag
         sliceFat = skinFat[:, :, j]
         sliceNotFat = notFatMask[:, :, j]
         # Remove external objects:
-        sliceFatEroded = sitk.BinaryMorphologicalOpening(sliceFat, 5)
+        sliceFatEroded = sitk.BinaryMorphologicalOpening(sliceFat, _radius_for_image(sliceFat, 5))
         ndaSliceFatMask = sitk.GetArrayFromImage(sliceFatEroded)
         ndaSliceFatMask = convex_hull_image(ndaSliceFatMask)
         sliceFatConvexHull = sitk.GetImageFromArray(ndaSliceFatMask.astype('uint8'))
@@ -169,7 +183,7 @@ def GetSkinFatFromTissueSegmentedImageUsingConvexHullPerSlice(dixonSegmentedImag
             connectedFilter.Execute(sliceNotFat))  # RelabelComponent sort its by size.
         sliceNotFat = sliceNotFatObjects > 0 # sitk.And(sliceNotFatObjects > 0, sliceNotFatObjects < 3) # Assumes that can be two large objetcts at most (for each leg)
         # Dilate to return to the original size:
-        sliceNotFat = sitk.BinaryDilate(sliceNotFat, 3)  # dilate to recover original size
+        sliceNotFat = sitk.BinaryDilate(sliceNotFat, _radius_for_image(sliceNotFat, 3))  # dilate to recover original size
 
         # Now apply the convex hull:
         ndaNotFatMask = sitk.GetArrayFromImage(sliceNotFat)
@@ -185,7 +199,7 @@ def GetSkinFatFromTissueSegmentedImageUsingConvexHullPerSlice(dixonSegmentedImag
         # Now paste the slice in the output:
         sliceFat = sitk.JoinSeries(sliceFat)  # Needs to be a 3D image
         skinFat = sitk.Paste(skinFat, sliceFat, sliceFat.GetSize(), destinationIndex=[0, 0, j])
-    skinFat = sitk.BinaryDilate(skinFat, 3)
+    skinFat = sitk.BinaryDilate(skinFat, _radius_for_image(skinFat, 3))
     return skinFat
 
 # gets the skin fat from a dixon segmented image, which consists of dixonSegmentedImage (0=air, 1=muscle, 2=muscle/fat,
@@ -199,7 +213,7 @@ def GetSkinFatFromTissueSegmentedImageUsingConvexHull(dixonSegmentedImage):
     bodyMask = BinaryFillHolePerSlice(bodyMask)
     # Create a mask for other tissue:
     notFatMask = sitk.And(bodyMask, (dixonSegmentedImage < 3))
-    notFatMask = sitk.BinaryMorphologicalOpening(notFatMask, 3)
+    notFatMask = sitk.BinaryMorphologicalOpening(notFatMask, _radius_for_image(notFatMask, 3))
     # Convex hull:
     ndaNotFatMask = sitk.GetArrayFromImage(notFatMask)
     ndaNotFatMask = convex_hull_image(ndaNotFatMask)
@@ -268,7 +282,8 @@ def GetBodyMaskFromFatDixonImage(fatImage, vectorRadius = (2,2,2), minObjectSize
     for j in range(0, fatMask.GetSize()[2]):
         sliceFat = fatMask[:, :, j]
         ndaSliceFatMask = sitk.GetArrayFromImage(sliceFat)
-        ndaSliceFatMask = convex_hull_image(ndaSliceFatMask)
+        if np.any(ndaSliceFatMask):
+            ndaSliceFatMask = convex_hull_image(ndaSliceFatMask)
         sliceFatConvexHull = sitk.GetImageFromArray(ndaSliceFatMask.astype('uint8'))
         sliceFatConvexHull.CopyInformation(sliceFat)
         # Now paste the slice in the output:
