@@ -665,6 +665,10 @@ for idx, row in subset.iterrows():
 
         # 5) Volver al espacio original de la pelvis (si hubo registro)
         if preRegistration:
+            # Parameters for image registration:
+            parameterMapVector = sitk.VectorOfParameterMap()
+            parameterMapVector.append(sitk.ElastixImageFilter().ReadParameterFile(parameterFilesPath + paramFileRigid + '.txt'))
+
             elastixImageFilter = sitk.ElastixImageFilter()
             elastixImageFilter.SetInitialTransformParameterFileName('TransformParameters.0.txt')
             elastixImageFilter.SetFixedImage(sitkImageResampledPelvis)
@@ -678,7 +682,7 @@ for idx, row in subset.iterrows():
             elastixImageFilter.Execute()
 
             Tx = elastixImageFilter.GetTransformParameterMap()
-            Tx[0]['InitialTransformParameterFileName'] = ('NoInitialTransform',)
+            Tx[0]['InitialTransformParametersFileName'] = ('NoInitialTransform',)
             Tx[0]['Origin'] = tuple(map(str, sitkImagePelvis.GetOrigin()))
             Tx[0]['Spacing'] = tuple(map(str, sitkImagePelvis.GetSpacing()))
             Tx[0]['Size'] = tuple(map(str, sitkImagePelvis.GetSize()))

@@ -2,6 +2,22 @@ import SimpleITK as sitk
 import SimpleITK as sitk, torch, imageio
 import numpy as np
 import multiprocessing
+import os
+from skimage.morphology import convex_hull_image
+
+
+def _radius_for_image(image, radius):
+    """Return a radius tuple matching the image dimensionality."""
+    if isinstance(radius, (int, np.integer)):
+        return (int(radius),) * image.GetDimension()
+
+    if isinstance(radius, (tuple, list, np.ndarray)):
+        if len(radius) == image.GetDimension():
+            return tuple(int(r) for r in radius)
+        if len(radius) == 1:
+            return (int(radius[0]),) * image.GetDimension()
+
+    raise ValueError("Radius must be an int or a sequence of length 1 or image dimension")
 
 
 def apply_bias_correction_2(image: np.ndarray, shrink_factor=4) -> np.ndarray:
@@ -334,8 +350,9 @@ def FilterUnconnectedRegions(image, numLabels, ref , radiusErodeDilate=0):
     maskFilter.SetMaskingValue(1)
     for i in range(0, numLabels):
         maskThisLabel = segmentedImage == (i+1)
+        radius = _radius_for_image(maskThisLabel, radiusErodeDilate)
         # Erode the mask:
-        maskThisLabel = sitk.BinaryErode(maskThisLabel, radiusErodeDilate)
+        maskThisLabel = sitk.BinaryErode(maskThisLabel, radius)
         # Now resegment to get labels for each segmented object:
         maskThisLabel = sitk.ConnectedComponent(maskThisLabel)
         # Relabel by object size:
@@ -343,7 +360,7 @@ def FilterUnconnectedRegions(image, numLabels, ref , radiusErodeDilate=0):
         # get the largest object:
         maskThisLabel = (maskThisLabel==1)
         # dilate the mask:
-        maskThisLabel = sitk.BinaryDilate(maskThisLabel, radiusErodeDilate)
+        maskThisLabel = sitk.BinaryDilate(maskThisLabel, radius)
         # Assign to the output:
         maskFilter.SetOutsideValue(i+1)
         outSegmentedImage = maskFilter.Execute(outSegmentedImage, maskThisLabel)
@@ -632,7 +649,7 @@ def GetSkinFatFromTissueSegmentedImageUsingConvexHullPerSlice(dixonSegmentedImag
     bodyMask = dixonSegmentedImage > 0
     # Create a mask for other tissue:
     notFatMask = sitk.And(bodyMask, (dixonSegmentedImage < 3))
-    notFatMask = sitk.BinaryMorphologicalOpening(notFatMask, 3)
+    notFatMask = sitk.BinaryMorphologicalOpening(notFatMask, _radius_for_image(notFatMask, 3))
     #Filter to process the slices:
     connectedFilter = sitk.ConnectedComponentImageFilter()
     connectedFilter.FullyConnectedOff()
@@ -645,9 +662,10 @@ def GetSkinFatFromTissueSegmentedImageUsingConvexHullPerSlice(dixonSegmentedImag
         sliceFat = skinFat[:, :, j]
         sliceNotFat = notFatMask[:, :, j]
         # Remove external objects:
-        sliceFatEroded = sitk.BinaryMorphologicalOpening(sliceFat, 5)
+        sliceFatEroded = sitk.BinaryMorphologicalOpening(sliceFat, _radius_for_image(sliceFat, 5))
         ndaSliceFatMask = sitk.GetArrayFromImage(sliceFatEroded)
-        ndaSliceFatMask = convex_hull_image(ndaSliceFatMask)
+        if np.any(ndaSliceFatMask):
+            ndaSliceFatMask = convex_hull_image(ndaSliceFatMask)
         sliceFatConvexHull = sitk.GetImageFromArray(ndaSliceFatMask.astype('uint8'))
         sliceFatConvexHull.CopyInformation(sliceFat)
         #sliceNotFat = sitk.BinaryErode(sliceNotFat, 3)
@@ -658,7 +676,7 @@ def GetSkinFatFromTissueSegmentedImageUsingConvexHullPerSlice(dixonSegmentedImag
             connectedFilter.Execute(sliceNotFat))  # RelabelComponent sort its by size.
         sliceNotFat = sliceNotFatObjects > 0 # sitk.And(sliceNotFatObjects > 0, sliceNotFatObjects < 3) # Assumes that can be two large objetcts at most (for each leg)
         # Dilate to return to the original size:
-        sliceNotFat = sitk.BinaryDilate(sliceNotFat, 3)  # dilate to recover original size
+        sliceNotFat = sitk.BinaryDilate(sliceNotFat, _radius_for_image(sliceNotFat, 3))  # dilate to recover original size
 
         # Now apply the convex hull:
         ndaNotFatMask = sitk.GetArrayFromImage(sliceNotFat)
@@ -674,7 +692,7 @@ def GetSkinFatFromTissueSegmentedImageUsingConvexHullPerSlice(dixonSegmentedImag
         # Now paste the slice in the output:
         sliceFat = sitk.JoinSeries(sliceFat)  # Needs to be a 3D image
         skinFat = sitk.Paste(skinFat, sliceFat, sliceFat.GetSize(), destinationIndex=[0, 0, j])
-    skinFat = sitk.BinaryDilate(skinFat, 3)
+    skinFat = sitk.BinaryDilate(skinFat, _radius_for_image(skinFat, 3))
     return skinFat
 
 
