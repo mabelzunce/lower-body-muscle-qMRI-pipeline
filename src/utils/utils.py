@@ -787,7 +787,11 @@ def write_vol_ff_simple_csv(output_csv_path, volumes_lumbar, ffs_lumbar,
     if subject_name in df["Subject"].values:
         idx = df.index[df["Subject"] == subject_name][0]
         for col in new_row_df.columns:
-            df.at[idx, col] = new_row_df.iloc[0][col]
+            value = new_row_df.iloc[0][col]
+            # Keep previous value when the new value is an empty placeholder.
+            if pd.isna(value) or (isinstance(value, str) and value.strip() == ""):
+                continue
+            df.at[idx, col] = value
     else:
         df = pd.concat([df, new_row_df], ignore_index=True)
 

@@ -40,6 +40,8 @@ gluteus_reference_path = "../../data/reference_images/pelvis_reference.nii.gz"
 device_to_use = 'cuda' #'cpu'
 gpu_number = 1
 preRegistration = True
+run_dixon_tissue_segmentation = True
+apply_bias_correction = False # Bias correction is applied in the dicom conversion function, no need to do it here (globally and in the cropped images)
 dataInSubdirPerSubject = True
 
 imageNames = []
@@ -98,12 +100,9 @@ def segment_region(
     spacing = sitkImage.GetSpacing()
     print(f"{region_name.capitalize()} spacing: {spacing}")
 
-    # 2️⃣ Bias Field Correction
-    sitkImage = ApplyBiasCorrection(sitkImage, shrinkFactor=(4, 4, 2))
-    bias_fname = os.path.join(outputPathThisSubject, f"{subject}_{region_name}_biasFieldCorrection.nii.gz")
-    sitk.WriteImage(sitkImage, bias_fname, True)
+    # No Bias Field Correction - It's appplied preivously to the concatenated images in the dicom conversion function
 
-    # 3️⃣ Registro a referencia
+    # 2 Registro a referencia
     if preRegistration and referenceImage is not None:
         elastixImageFilter = sitk.ElastixImageFilter()
         elastixImageFilter.SetFixedImage(referenceImage)
@@ -118,7 +117,7 @@ def segment_region(
         sitkImageResampled = sitkImage
     print("[DEBUG LUMBAR] after registration:", sitkImageResampled.GetSize())
 
-    # 4️⃣ Segmentación con el modelo correspondiente
+    # 3️⃣ Segmentación con el modelo correspondiente
     image_np = sitk.GetArrayFromImage(sitkImageResampled).astype(np.float32)
     image_np = np.expand_dims(image_np, axis=0)
 
@@ -133,7 +132,7 @@ def segment_region(
 
     output = FilterUnconnectedRegions(output.squeeze(0), multilabelNum, sitkImageResampled)
 
-    # 5️⃣ Volver al espacio original si hubo registro
+    # 4️⃣ Volver al espacio original si hubo registro
     if preRegistration:
         elastixImageFilter = sitk.ElastixImageFilter()
         elastixImageFilter.SetInitialTransformParameterFileName(f"TransformParameters.0.txt")
@@ -163,7 +162,7 @@ def segment_region(
         transformixImageFilter.Execute()
         output = sitk.Cast(transformixImageFilter.GetResultImage(), sitk.sitkUInt8)
 
-    # 6️⃣ Alinear a la imagen original
+    # 5️⃣ Alinear a la imagen original
     output = sitk.Resample(output, sitkImage, sitk.Euler3DTransform(), sitk.sitkNearestNeighbor)
     single_mask = output > 0
 
@@ -178,6 +177,11 @@ def segment_region(
 
     return output, single_mask
 
+
+
+
+
+####################################### SCRIPT STARTS HERE #######################################
 #CHECK DEVICE:
 device = torch.device(device_to_use) #'cuda' uses the graphic board
 print(device)
@@ -210,7 +214,7 @@ def to_int_or_none(x):
     return None if pd.isna(x) else int(x)
 
 # --------------------------- PROCESS EACH VOLUNTEER ---------------------------
-ids_to_process = []#["S0074"]
+ids_to_process = []#["S0040"]
 if len(ids_to_process) > 0:
     subset = coords_df[coords_df['ID'].isin(ids_to_process)]
     print("Voluntarios a procesar:", subset)
@@ -276,8 +280,9 @@ for idx, row in subset.iterrows():
             dixon_index = dixon_types.index(dixon_tag)
             # Apply bias correction if needed
             if dixon_tag == 'in':
-                print(f"Applying bias correction to {input_file_tag}")
-                images_dixon[dixon_tag] = apply_bias_correction(images_dixon[dixon_tag], shrinkFactor=(8, 8, 4))
+                if ApplyBiasCorrection:
+                    print(f"Applying bias correction to {input_file_tag}")
+                    images_dixon[dixon_tag] = ApplyBiasCorrection(images_dixon[dixon_tag], shrinkFactor=(8, 8, 4))
                 #print("[DEBUG MAIN] Bias correction finished and returned")
              # todo: get the field and apply it to the other images
         else:
@@ -326,114 +331,96 @@ for idx, row in subset.iterrows():
         # --------------------------- END OF CROP --------------------------
 
     # -------------------- TISSUE / SUBCUTANEOUS FAT SEGMENTATION --------------------
-    print("Running Dixon tissue segmentation...")
+    if run_dixon_tissue_segmentation:
+        print("Running Dixon tissue segmentation...")
 
-    # 1) Generate the tissue segmented image
-    dixonImages_list = [
-        images_dixon['in'],
-        images_dixon['opp'],
-        images_dixon['w'],
-        images_dixon['f']
-    ]
-    segmentedImage = DixonTissueSegmentation.DixonTissueSegmentation(dixonImages_list)
-    sitk.WriteImage(
-        segmentedImage,
-        os.path.join(outputPathThisSubject, f"{subject}_tissue_segmented{extensionImages}"),
-        True
-    )
+        # 1) Generate the tissue segmented image
+        dixonImages_list = [
+            images_dixon['in'],
+            images_dixon['opp'],
+            images_dixon['w'],
+            images_dixon['f']
+        ]
+        segmentedImage = DixonTissueSegmentation.DixonTissueSegmentation(dixonImages_list)
+        sitk.WriteImage(
+            segmentedImage,
+            os.path.join(outputPathThisSubject, f"{subject}_tissue_segmented{extensionImages}"),
+            True
+        )
 
-    # 2) Body mask (from the fat image, usually more robust)
-    bodyMask = DixonTissueSegmentation.GetBodyMaskFromFatDixonImage(
-        images_dixon['f'], vectorRadius=(2, 2, 1)
-    )
-    sitk.WriteImage(
-        bodyMask,
-        os.path.join(outputPathThisSubject, f"{subject}_bodyMask{extensionImages}"),
-        True
-    )
+        # 2) Body mask (from the fat image, usually more robust)
+        bodyMask = DixonTissueSegmentation.GetBodyMaskFromFatDixonImage(
+            images_dixon['f'], vectorRadius=(2, 2, 1)
+        )
+        sitk.WriteImage(
+            bodyMask,
+            os.path.join(outputPathThisSubject, f"{subject}_bodyMask{extensionImages}"),
+            True
+        )
 
-    # --- GIF de BodyMask ---
-    image_path = os.path.join(input_folder, f"{subject}_in_dixon_concatenated.nii.gz")
-    mask_path = os.path.join(outputPathThisSubject, f"{subject}_bodyMask{extensionImages}")
-    gif_output = os.path.join(outputPathThisSubject, f"{subject}_bodyMask_overlay.gif")
-
-    sitkImage = sitk.ReadImage(image_path)
-    sitkMask = sitk.ReadImage(mask_path)
-    sitkMask.CopyInformation(sitkImage)  # asegurar mismo espacio
-
-    create_segmentation_overlay_animated_gif(sitkImage, sitkMask, gif_output)
+        # --- GIF de BodyMask ---
+        gif_output = os.path.join(outputPathThisSubject, f"{subject}_bodyMask_overlay.gif")
+        #bodyMask.CopyInformation(images_dixon['in'])  # asegurar mismo espacio
+        create_segmentation_overlay_animated_gif(images_dixon['in'], bodyMask, gif_output)
 
 
-    # 3) Subcutaneous fat mask (using convex hull, slice by slice)
-    skinFat = DixonTissueSegmentation.GetSkinFatFromTissueSegmentedImageUsingConvexHullPerSlice(segmentedImage)
-    skinFat = sitk.And(skinFat, bodyMask)  # remove artefacts outside the body
-    sitk.WriteImage(skinFat,
-        os.path.join(outputPathThisSubject, f"{subject}_skinFat{extensionImages}"),
-        True
-    )
+        # 3) Subcutaneous fat mask (using convex hull, slice by slice) - only fot perlvis at the moment
+        skinFat = DixonTissueSegmentation.GetSkinFatFromTissueSegmentedImageUsingConvexHullPerSlice(segmentedImage)
+        skinFat = sitk.And(skinFat, bodyMask)  # remove artefacts outside the body
+        sitk.WriteImage(skinFat,
+            os.path.join(outputPathThisSubject, f"{subject}_skinFat{extensionImages}"),
+            True
+        )
+        gif_output = os.path.join(outputPathThisSubject, f"{subject}_skinFat_overlay.gif")
+        create_segmentation_overlay_animated_gif(images_dixon['in'], skinFat, gif_output)
+        # TODO: check if we can do the pelvis just by cropping.
+        # --- Subcutaneous fat mask for pelvis crop ---
+        print("Running subcutaneous fat mask for pelvis crop...")
+        # Generar la segmentación de tejidos solo en el recorte de pelvis
+        dixonImages_pelvis = [inPhaseImagePelvis,outOfPhaseImagePelvis,waterImagePelvis,fatImagePelvis]
+        #segmentedPelvis = DixonTissueSegmentation.DixonTissueSegmentation(dixonImages_pelvis)
+        segmentedPelvis = segmentedImage[:, :, trochanter:iliac_crest]
+        # Body mask en el recorte de pelvis (desde fat)
+        bodyMaskPelvis = DixonTissueSegmentation.GetBodyMaskFromFatDixonImage(fatImagePelvis, vectorRadius=(2, 2, 1))
 
-    # --- Subcutaneous fat mask for pelvis crop ---
-    print("Running subcutaneous fat mask for pelvis crop...")
-    # Generar la segmentación de tejidos solo en el recorte de pelvis
-    dixonImages_pelvis = [inPhaseImagePelvis,outOfPhaseImagePelvis,waterImagePelvis,fatImagePelvis]
-    segmentedPelvis = DixonTissueSegmentation.DixonTissueSegmentation(dixonImages_pelvis)
-    # Body mask en el recorte de pelvis (desde fat)
-    bodyMaskPelvis = DixonTissueSegmentation.GetBodyMaskFromFatDixonImage(fatImagePelvis, vectorRadius=(2, 2, 1))
+        # SkinFat en pelvis
+        skinFatPelvis = DixonTissueSegmentation.GetSkinFatFromTissueSegmentedImageUsingConvexHullPerSlice(segmentedPelvis)
+        skinFatPelvis = sitk.And(skinFatPelvis, bodyMaskPelvis)
 
-    # SkinFat en pelvis
-    skinFatPelvis = DixonTissueSegmentation.GetSkinFatFromTissueSegmentedImageUsingConvexHullPerSlice(segmentedPelvis)
-    skinFatPelvis = sitk.And(skinFatPelvis, bodyMaskPelvis)
+        # Guardar
+        sitk.WriteImage(
+            skinFatPelvis,
+            os.path.join(outputPathThisSubject, f"{subject}_pelvis_skinFat{extensionImages}"),
+            True
+        )
 
-    # Guardar
-    sitk.WriteImage(
-        skinFatPelvis,
-        os.path.join(outputPathThisSubject, f"{subject}_pelvis_skinFat{extensionImages}"),
-        True
-    )
+        # 4) Muscle mask
+        muscleMask = DixonTissueSegmentation.GetMuscleMaskFromTissueSegmentedImage(
+            segmentedImage, vectorRadius=(4, 4, 3)
+        )
+        sitk.WriteImage(
+            muscleMask,
+            os.path.join(outputPathThisSubject, f"{subject}_muscleMask{extensionImages}"),
+            True
+        )
 
-    # 4) Muscle mask
-    muscleMask = DixonTissueSegmentation.GetMuscleMaskFromTissueSegmentedImage(
-        segmentedImage, vectorRadius=(4, 4, 3)
-    )
-    sitk.WriteImage(
-        muscleMask,
-        os.path.join(outputPathThisSubject, f"{subject}_muscleMask{extensionImages}"),
-        True
-    )
+        # Generate GIF
+        gif_output = os.path.join(outputPathThisSubject, f"{subject}_pelvis_skinFat_overlay.gif")
+        # Make sure mask has same metadata as image
+        #skinFatPelvis.CopyInformation(inPhaseImagePelvis)
+        create_segmentation_overlay_animated_gif(inPhaseImagePelvis, skinFatPelvis, gif_output)
 
-    # Generate GIF
-    image_path = os.path.join(output_pelvis_path, f"{subject}", f"{subject}_I.nii.gz")
-    mask_path = os.path.join(outputPathThisSubject, f"{subject}_pelvis_skinFat{extensionImages}")
-    gif_output = os.path.join(outputPathThisSubject, f"{subject}_pelvis_skinFat_overlay.gif")
-    # Load image and mask
-    sitkImage = sitk.ReadImage(image_path)
-    sitkMask = sitk.ReadImage(mask_path)
-    # Make sure mask has same metadata as image
-    sitkMask.CopyInformation(sitkImage)
-    create_segmentation_overlay_animated_gif(sitkImage, sitkMask, gif_output)
+        # === VOLUMES OF SUBCUTANEOUS FAT ===
 
-    # Paths dinámicos para este voluntario
-    image_path = os.path.join(input_folder, f"{subject}_in_dixon_concatenated.nii.gz")
-    mask_path = os.path.join(outputPathThisSubject, f"{subject}_skinFat{extensionImages}")
-    gif_output = os.path.join(outputPathThisSubject, f"{subject}_skinFat_overlay.gif")
-    # Load image and mask
-    sitkImage = sitk.ReadImage(image_path)
-    sitkMask = sitk.ReadImage(mask_path)
-    # Make sure mask has same metadata as image
-    sitkMask.CopyInformation(sitkImage)
-    create_segmentation_overlay_animated_gif(sitkImage, sitkMask, gif_output)
+        # Volumen de skinFat total
+        skinFat_array = sitk.GetArrayFromImage(skinFat)
+        voxel_volume = np.prod(skinFat.GetSpacing())
+        skinFat_total_vol = np.sum(skinFat_array > 0) * voxel_volume
 
-    # === VOLUMES OF SUBCUTANEOUS FAT ===
-
-    # Volumen de skinFat total
-    skinFat_array = sitk.GetArrayFromImage(skinFat)
-    voxel_volume = np.prod(skinFat.GetSpacing())
-    skinFat_total_vol = np.sum(skinFat_array > 0) * voxel_volume
-
-    # Volumen de skinFat en pelvis
-    skinFat_pelvis_array = sitk.GetArrayFromImage(skinFatPelvis)
-    voxel_volume_pelvis = np.prod(skinFatPelvis.GetSpacing())
-    skinFat_pelvis_vol = np.sum(skinFat_pelvis_array > 0) * voxel_volume_pelvis
+        # Volumen de skinFat en pelvis
+        skinFat_pelvis_array = sitk.GetArrayFromImage(skinFatPelvis)
+        voxel_volume_pelvis = np.prod(skinFatPelvis.GetSpacing())
+        skinFat_pelvis_vol = np.sum(skinFat_pelvis_array > 0) * voxel_volume_pelvis
 
     # -------------------- FAT FRACTION CALCULATION --------------------
 
@@ -476,10 +463,6 @@ for idx, row in subset.iterrows():
 
         # Get the spacial dimensions
         spacing = sitkImage.GetSpacing()  # Tuple (spacing_x, spacing_y, spacing_z)
-
-        # Apply Bias Field Correction
-        shrinkFactor = (4, 4, 2)
-        sitkImage = ApplyBiasCorrection(sitkImage, shrinkFactor=shrinkFactor)
 
         # Obtains the name of the file (without the complete path and divide name and extension)
         filename_no_ext = subject
@@ -625,14 +608,8 @@ for idx, row in subset.iterrows():
         else:
             sitkImagePelvis = fatImagePelvis  # fallback
 
-        # 2) Espaciado y bias field correction
+        # 2) Espaciado
         spacingPelvis = sitkImagePelvis.GetSpacing()
-        print("Pelvis spacing:", spacingPelvis)
-        sitkImagePelvis = ApplyBiasCorrection(sitkImagePelvis, shrinkFactor=(4, 4, 2))
-
-        # Guardar la pelvis corregida (opcional, mismo formato que arriba)
-        pelvis_bias_fname = os.path.join(outputPathThisSubject, f"{subject}_pelvis_biasFieldCorrection.nii.gz")
-        sitk.WriteImage(sitkImagePelvis, pelvis_bias_fname, True)
 
         # 3) Registro (usar referencia de glúteo)
         if preRegistration:
@@ -682,7 +659,7 @@ for idx, row in subset.iterrows():
             elastixImageFilter.Execute()
 
             Tx = elastixImageFilter.GetTransformParameterMap()
-            Tx[0]['InitialTransformParametersFileName'] = ('NoInitialTransform',)
+            Tx[0]['InitialTransformParameterFileName'] = ('NoInitialTransform',)
             Tx[0]['Origin'] = tuple(map(str, sitkImagePelvis.GetOrigin()))
             Tx[0]['Spacing'] = tuple(map(str, sitkImagePelvis.GetSpacing()))
             Tx[0]['Size'] = tuple(map(str, sitkImagePelvis.GetSize()))
@@ -799,7 +776,7 @@ for idx, row in subset.iterrows():
 
 
             # Crear carpeta de salida para las imágenes cortadas
-            output_bilateral_crop_path = os.path.join(outputPathThisSubject, "bilateral_cuts")
+            output_bilateral_crop_path = os.path.join(outputPathThisSubject, "bilateral_cropped")
             os.makedirs(output_bilateral_crop_path, exist_ok=True)
 
             bilateral_cuts = {}
@@ -837,7 +814,7 @@ for idx, row in subset.iterrows():
                         device,
                         glutealModel,  # mismo modelo que pelvis
                         multilabelNum,
-                        ApplyBiasCorrection,
+                        apply_bias_correction,
                         maxProb,
                         FilterUnconnectedRegions,
                         create_segmentation_overlay_animated_gif,

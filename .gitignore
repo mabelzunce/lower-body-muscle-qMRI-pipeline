@@ -15,3 +15,7 @@ src/segmentation/TransformParameters.0.txt
 src/utils/__pycache__/*
 src/segmentation/__pycache__/*
 src/segmentation/__pycache__/unet_3d.cpython-310.pyc
+.vscode/launch.json
+src/segmentation/result.0.mhd
+src/segmentation/result.0.nii
+src/segmentation/result.0.raw
