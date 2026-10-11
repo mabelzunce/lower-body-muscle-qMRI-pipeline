@@ -19,3 +19,4 @@ src/segmentation/__pycache__/unet_3d.cpython-310.pyc
 src/segmentation/result.0.mhd
 src/segmentation/result.0.nii
 src/segmentation/result.0.raw
+.vscode/settings.json
