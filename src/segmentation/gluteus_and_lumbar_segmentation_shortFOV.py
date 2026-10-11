@@ -10,15 +10,15 @@ from PIL import Image
 from skimage.morphology import convex_hull_image
 from unet_3d import Unet
 sys.path.append(os.path.join(os.path.dirname(__file__), "../utils"))
-from utils import ApplyBiasCorrection, create_segmentation_overlay_animated_gif, apply_bias_correction, multilabel, maxProb, FilterUnconnectedRegions, write_vol_ff_simple_csv
+from utils import ApplyBiasCorrection, create_segmentation_overlay_animated_gif, create_segmentation_overlay_animated_gif_shortfov, apply_bias_correction, multilabel, maxProb, FilterUnconnectedRegions, write_vol_ff_simple_csv
 dixon_types = ['in', 'opp', 'f', 'w']
 dixon_output_tag = ['I', 'O', 'F', 'W']
 
 # --------------------------- CONFIG PATHS  ---------------------------
-input_root = '/home/martin/data_imaging/Muscle/data_sarcopenia_tx/nifti_output/'
-outputPath = '/home/martin/data_imaging/Muscle/data_sarcopenia_tx/segmentations/'
-output_pelvis_path = '/home/martin/data_imaging/Muscle/data_sarcopenia_tx/nifti_pelvis/'
-output_lumbar_path = '/home/martin/data_imaging/Muscle/data_sarcopenia_tx/nifti_lumbar/'
+input_root = '/home/victoria/Documentos/muscle_report/data/data_test/'
+outputPath = '/home/victoria/Documentos/muscle_report/data/data_test/test_results/'
+output_pelvis_path = '/home/victoria/Documentos/muscle_report/data/data_test/test_results/nifti_pelvis/'
+output_lumbar_path = '/home/victoria/Documentos/muscle_report/data/data_test/test_results/nifti_lumbar/'
 os.makedirs(outputPath, exist_ok=True)
 os.makedirs(output_pelvis_path, exist_ok=True)
 os.makedirs(output_lumbar_path, exist_ok=True)
@@ -37,7 +37,7 @@ lumbar_reference_path  = "../../data/reference_images/C00001.mhd"
 gluteus_reference_path = "../../data/reference_images/pelvis_reference.nii.gz"
 
 # CONFIGURATION:
-device_to_use = 'cuda' #'cpu'
+device_to_use = 'cpu' #'cpu'
 gpu_number = 1
 preRegistration = True
 run_dixon_tissue_segmentation = True
@@ -85,7 +85,7 @@ def segment_region(
     ApplyBiasCorrection,
     maxProb,
     FilterUnconnectedRegions,
-    create_segmentation_overlay_animated_gif,
+    create_segmentation_overlay_animated_gif_shortfov,
     region_name="pelvis",   # puede ser "pelvis", "lumbar", "bilateral", etc.
     extensionImages=".mhd"
 ):
@@ -147,7 +147,7 @@ def segment_region(
         elastixImageFilter.Execute()
 
         Tx = elastixImageFilter.GetTransformParameterMap()
-        Tx[0]['InitialTransformParametersFileName'] = ('NoInitialTransform',)
+        Tx[0]['InitialTransformParameterFileName'] = ('NoInitialTransform',) #modified for compatibility with new SimpleITK version (Parameter instead of Parameters)
         Tx[0]['Origin'] = tuple(map(str, sitkImage.GetOrigin()))
         Tx[0]['Spacing'] = tuple(map(str, sitkImage.GetSpacing()))
         Tx[0]['Size'] = tuple(map(str, sitkImage.GetSize()))
@@ -172,7 +172,7 @@ def segment_region(
 
     # GIF de control
     gif_path = os.path.join(outputPathThisSubject, f"{subject}_{region_name}_segmentation_check.gif")
-    create_segmentation_overlay_animated_gif(sitkImage, output, gif_path)
+    create_segmentation_overlay_animated_gif_shortfov(sitkImage, output, gif_path)
     print(f"[DONE] {region_name.capitalize()} segmentation complete for {subject}. GIF saved to {gif_path}")
 
     return output, single_mask
@@ -214,7 +214,7 @@ def to_int_or_none(x):
     return None if pd.isna(x) else int(x)
 
 # --------------------------- PROCESS EACH VOLUNTEER ---------------------------
-ids_to_process = []#["S0040"]
+ids_to_process = ["S0040"]#["S0040"]
 if len(ids_to_process) > 0:
     subset = coords_df[coords_df['ID'].isin(ids_to_process)]
     print("Voluntarios a procesar:", subset)
@@ -280,7 +280,7 @@ for idx, row in subset.iterrows():
             dixon_index = dixon_types.index(dixon_tag)
             # Apply bias correction if needed
             if dixon_tag == 'in':
-                if ApplyBiasCorrection:
+                if apply_bias_correction: #changed accordingly to flag
                     print(f"Applying bias correction to {input_file_tag}")
                     images_dixon[dixon_tag] = ApplyBiasCorrection(images_dixon[dixon_tag], shrinkFactor=(8, 8, 4))
                 #print("[DEBUG MAIN] Bias correction finished and returned")
@@ -735,9 +735,12 @@ for idx, row in subset.iterrows():
     else:
         print("[WARN] No se encontró ffPelvis para calcular FF por etiqueta en pelvis.")
 
-    # -------------------- BILATERAL SHORT FOV PROCESSING --------------------
+    # -------------------- (BILATERAL) SHORT FOV PROCESSING - MODIFIED TO BE DONE SEPARATELY FOR LUMBAR AND PELVIC REGION --------------------
     volumes_bilateral = None
     fat_fraction_means_bilateral = None
+    volumes_bilateral_lumbar = None     
+    fat_fraction_means_bilateral_lumbar = None 
+
     bilateral_folder = os.path.join(input_folder, "bilateral")
     if os.path.isdir(bilateral_folder) and do_short:
         print(f"[INFO] Bilateral folder detected for {subject}. Running short-FOV preprocessing...")
@@ -745,7 +748,7 @@ for idx, row in subset.iterrows():
         bilateral_images = {}
         import glob
 
-        # Buscar las 4 imágenes Dixon en la carpeta bilateral
+        # Search for each Dixon type in the bilateral folder
         for dixon_tag in dixon_types:
             search_pattern = os.path.join(bilateral_folder, f"*bilateral_{dixon_tag}.nii.gz")
             found = glob.glob(search_pattern)
@@ -756,29 +759,42 @@ for idx, row in subset.iterrows():
             else:
                 print(f"[WARN] Missing {dixon_tag} image in bilateral folder for {subject}")
 
-        # Confirmar que exista la imagen in-phase
+        # if in-phase exists, proceed with cropping and segmentation
         if 'in' in bilateral_images:
             bilateral_in = bilateral_images['in']
 
-            # --- Leer coordenadas desde el CSV ---
+            # --- Read coordinates from CSV (Gluteus & Lumbar) ---
             if (
-                    'Lesser Trochanter Short' in row and
-                    'Iliac Crest Short' in row and
-                    not pd.isna(row['Lesser Trochanter Short']) and
-                    not pd.isna(row['Iliac Crest Short'])
+                'Lesser Trochanter Short' in row and
+                'Iliac Crest Short' in row and
+                not pd.isna(row['Lesser Trochanter Short']) and
+                not pd.isna(row['Iliac Crest Short'])
             ):
                 trochanter_short = int(row['Lesser Trochanter Short'])
                 iliac_short = int(row['Iliac Crest Short'])
-                print(f"[INFO] Cropping bilateral images between slices {trochanter_short}:{iliac_short}")
+                print(f"[INFO] Cropping gluteal bilateral images between slices {trochanter_short}:{iliac_short}")
             else:
-                print(f"[WARN] Missing or invalid short FOV coordinates for {subject}, skipping bilateral crop.")
+                print(f"[WARN] Missing or invalid gluteal short FOV coordinates for {subject}, skipping gluteal crop.")
                 trochanter_short, iliac_short = None, None
 
+            if (
+                'Lesser Trochanter Short' in row and
+                'L1 Short' in row and
+                not pd.isna(row['Lesser Trochanter Short']) and
+                not pd.isna(row['L1 Short'])
+            ):
+                lumbar_start_short = int(row['Lesser Trochanter Short'])
+                lumbar_end_short = int(row['L1 Short'])
+                print(f"[INFO] Cropping lumbar bilateral images between slices {lumbar_start_short}:{lumbar_end_short}")
+            else:
+                print(f"[WARN] Missing or invalid lumbar short FOV coordinates for {subject}, skipping lumbar crop.")
+                lumbar_start_short, lumbar_end_short = None, None
 
-            # Crear carpeta de salida para las imágenes cortadas
+            # Create output directory for cropped images
             output_bilateral_crop_path = os.path.join(outputPathThisSubject, "bilateral_cropped")
             os.makedirs(output_bilateral_crop_path, exist_ok=True)
 
+            # --- Gluteal Crop ---
             bilateral_cuts = {}
             if trochanter_short is not None and iliac_short is not None:
                 for dixon_tag in dixon_types:
@@ -789,88 +805,170 @@ for idx, row in subset.iterrows():
 
                         output_filename = f"{subject}_B_{dixon_output_tag[dixon_types.index(dixon_tag)]}.nii.gz"
                         sitk.WriteImage(cropped_img, os.path.join(output_bilateral_crop_path, output_filename))
-                        print(f"[OK] Saved cropped bilateral {dixon_tag} image to {output_filename}")
+                        print(f"[OK] Saved cropped bilateral gluteal {dixon_tag} image to {output_filename}")
 
-                # Definir variables de conveniencia para usar después (segmentación o FF)
-                bilateral_in_cut = bilateral_cuts.get('in', None)
-                bilateral_f_cut = bilateral_cuts.get('f', None)
-                bilateral_w_cut = bilateral_cuts.get('w', None)
-                bilateral_opp_cut = bilateral_cuts.get('opp', None)
+            # Convenience variables for gluteal region
+            bilateral_in_cut = bilateral_cuts.get('in', None)
+            bilateral_f_cut = bilateral_cuts.get('f', None)
+            bilateral_w_cut = bilateral_cuts.get('w', None)
+            bilateral_opp_cut = bilateral_cuts.get('opp', None)
 
-                print(f"[DONE] Bilateral images cropped and ready for processing.")
+            # --- Lumbar Crop ---
+            bilateral_lumbar_cuts = {}
+            if lumbar_start_short is not None and lumbar_end_short is not None:
+                for dixon_tag in dixon_types:
+                    if dixon_tag in bilateral_images:
+                        sitk_img = bilateral_images[dixon_tag]
+                        cropped_img = sitk_img[:, :, lumbar_start_short:lumbar_end_short]
+                        bilateral_lumbar_cuts[dixon_tag] = cropped_img
 
-                # -------------------- SEGMENTACIÓN GLÚTEA DEL FOV CORTO --------------------
+                        output_filename = f"{subject}_B_lumbar_{dixon_output_tag[dixon_types.index(dixon_tag)]}.nii.gz"
+                        sitk.WriteImage(cropped_img, os.path.join(output_bilateral_crop_path, output_filename))
+                        print(f"[OK] Saved cropped bilateral lumbar {dixon_tag} image to {output_filename}")
+
+            # Convenience variables for lumbar region
+            bilateral_in_lumbar_cut = bilateral_lumbar_cuts.get('in', None)
+            bilateral_f_lumbar_cut = bilateral_lumbar_cuts.get('f', None)
+            bilateral_w_lumbar_cut = bilateral_lumbar_cuts.get('w', None)
+            bilateral_opp_lumbar_cut = bilateral_lumbar_cuts.get('opp', None)
+
+            print(f"[DONE] Bilateral images cropped and ready for processing.")
+
+            # -------------------- GLUTEAL SHORT FOV SEGMENTATION --------------------
+            if bilateral_in_cut is not None:
                 print(f"[INFO] Running gluteal model segmentation on cropped bilateral FOV for {subject}...")
 
-                if bilateral_in_cut is not None:
-                    outputBilateral, bilateral_mask = segment_region(
-                        bilateral_in_cut,
-                        bilateral_f_cut,
-                        subject,
-                        outputPathThisSubject,
-                        referenceImage_gluteus,
-                        parameterMapVector,
-                        preRegistration,
-                        device,
-                        glutealModel,  # mismo modelo que pelvis
-                        multilabelNum,
-                        apply_bias_correction,
-                        maxProb,
-                        FilterUnconnectedRegions,
-                        create_segmentation_overlay_animated_gif,
-                        region_name="bilateral"
+                outputBilateral, bilateral_mask = segment_region(
+                    bilateral_in_cut,
+                    bilateral_f_cut,
+                    subject,
+                    outputPathThisSubject,
+                    referenceImage_gluteus,
+                    parameterMapVector,
+                    preRegistration,
+                    device,
+                    glutealModel,  # same model as pelvis
+                    multilabelNum,
+                    apply_bias_correction,
+                    maxProb,
+                    FilterUnconnectedRegions,
+                    create_segmentation_overlay_animated_gif_shortfov,
+                    region_name="shortFOV_pelvis"
+                )
+
+                # === VOLUMES AND FAT FRACTION FOR GLUTEAL SHORT FOV ===
+                print(f"[INFO] Calculating volumes and fat fraction (Gluteal Short FOV) for {subject}...")
+
+                segmentation_array_bilateral = sitk.GetArrayFromImage(outputBilateral)
+                spacing_bilateral = outputBilateral.GetSpacing()
+                voxel_volume_bilateral = np.prod(spacing_bilateral)
+
+                volumes_bilateral = {}
+                for label in range(1, multilabelNum + 1):
+                    label_vox = np.sum(segmentation_array_bilateral == label)
+                    volumes_bilateral[label] = label_vox * voxel_volume_bilateral
+
+                print("\n Volumes (Pelvis Short FOV):")
+                for label, vol in volumes_bilateral.items():
+                    print(f"  • Label {label}: {vol:.2f} mm³")
+
+                # Fat fraction (if fat and water images exist)
+                fat_fraction_means_bilateral = {}
+                if (bilateral_f_cut is not None) and (bilateral_w_cut is not None):
+                    fatImageB = sitk.Cast(bilateral_f_cut, sitk.sitkFloat32)
+                    waterImageB = sitk.Cast(bilateral_w_cut, sitk.sitkFloat32)
+                    waterfatB = sitk.Add(fatImageB, waterImageB)
+                    ffB = sitk.Divide(fatImageB, waterfatB)
+                    ffB = sitk.Cast(
+                        sitk.Mask(ffB, waterfatB > 0, outsideValue=0, maskingValue=0),
+                        sitk.sitkFloat32
                     )
 
-                    # === VOLUMENES Y FAT FRACTION PARA SHORT FOV ===
-                    print(f"[INFO] Calculando volúmenes y fat fraction (Short FOV) para {subject}...")
-
-                    segmentation_array_bilateral = sitk.GetArrayFromImage(outputBilateral)
-                    spacing_bilateral = outputBilateral.GetSpacing()
-                    voxel_volume_bilateral = np.prod(spacing_bilateral)
-
-                    volumes_bilateral = {}
+                    ff_array_bilateral = sitk.GetArrayFromImage(ffB)
                     for label in range(1, multilabelNum + 1):
-                        label_vox = np.sum(segmentation_array_bilateral == label)
-                        volumes_bilateral[label] = label_vox * voxel_volume_bilateral
-
-                    print("\n Volúmenes (Short FOV):")
-                    for label, vol in volumes_bilateral.items():
-                        print(f"  • Label {label}: {vol:.2f} mm³")
-
-                    # Fat fraction (si hay imágenes de grasa y agua)
-                    fat_fraction_means_bilateral = {}
-                    if (bilateral_f_cut is not None) and (bilateral_w_cut is not None):
-                        fatImageB = sitk.Cast(bilateral_f_cut, sitk.sitkFloat32)
-                        waterImageB = sitk.Cast(bilateral_w_cut, sitk.sitkFloat32)
-                        waterfatB = sitk.Add(fatImageB, waterImageB)
-                        ffB = sitk.Divide(fatImageB, waterfatB)
-                        ffB = sitk.Cast(
-                            sitk.Mask(ffB, waterfatB > 0, outsideValue=0, maskingValue=0),
-                            sitk.sitkFloat32
-                        )
-
-                        ff_array_bilateral = sitk.GetArrayFromImage(ffB)
-                        for label in range(1, multilabelNum + 1):
-                            mask_l = (segmentation_array_bilateral == label)
-                            fat_fraction_means_bilateral[label] = float(np.mean(ff_array_bilateral[mask_l])) if np.any(
-                                mask_l) else None
-                    else:
-                        print(f"[WARN] No se encontraron imágenes W/F para FF bilateral en {subject}")
-
-                    print("\n Fat Fraction (Short FOV):")
-                    for label, ff in fat_fraction_means_bilateral.items():
-                        if ff is not None:
-                            print(f"  • Label {label}: {ff:.4f}")
-                        else:
-                            print(f"  • Label {label}: sin valores válidos")
-
+                        mask_l = (segmentation_array_bilateral == label)
+                        fat_fraction_means_bilateral[label] = float(np.mean(ff_array_bilateral[mask_l])) if np.any(
+                            mask_l) else None
                 else:
-                    print(f"[WARN] No cropped in-phase bilateral image found for {subject}. Skipping segmentation.")
+                    print(f"[WARN] No W/F images found for gluteal bilateral FF in {subject}")
 
+                print("\n Fat Fraction (Pelvis Short FOV):")
+                for label, ff in fat_fraction_means_bilateral.items():
+                    if ff is not None:
+                        print(f"  • Label {label}: {ff:.4f}")
+                    else:
+                        print(f"  • Label {label}: no valid values")
             else:
-                print(f"[WARN] Bilateral cropping skipped for {subject} (missing coordinates).")
-        else:
-            print(f"[WARN] No in-phase image found in bilateral folder for {subject}. Skipping.")
+                print(f"[WARN] No cropped in-phase bilateral image found for gluteal region in {subject}. Skipping gluteal shortFOV segmentation.")
+
+            # -------------------- LUMBAR SHORT FOV SEGMENTATION --------------------
+            if bilateral_in_lumbar_cut is not None:
+                print(f"[INFO] Running lumbar model segmentation on cropped bilateral FOV for {subject}...")
+
+                outputLumbarB, lumbar_mask_bilateral = segment_region(
+                    bilateral_in_lumbar_cut,
+                    bilateral_f_lumbar_cut,
+                    subject,
+                    outputPathThisSubject,
+                    referenceImage_lumbar,
+                    parameterMapVector,
+                    preRegistration, 
+                    device,
+                    lumbarModel,
+                    multilabelNum,
+                    apply_bias_correction,
+                    maxProb,
+                    FilterUnconnectedRegions,
+                    create_segmentation_overlay_animated_gif_shortfov,
+                    region_name="shortFOV_lumbar"
+                )
+
+                sitk.WriteImage(outputLumbarB, os.path.join(outputPathThisSubject, f"{subject}_bilateral_lumbar_segmentation{extensionImages}"), True)
+                sitk.WriteImage(lumbar_mask_bilateral, os.path.join(outputPathThisSubject, f"{subject}_bilateral_lumbar_mask{extensionImages}"), True)
+
+                # === VOLUMES AND FAT FRACTION FOR LUMBAR SHORT FOV ===
+                print(f"[INFO] Calculating volumes and fat fraction (Lumbar Short FOV) for {subject}...")
+
+                segmentation_array_bilateral_lumbar = sitk.GetArrayFromImage(outputLumbarB)
+                spacing_bilateral_lumbar = outputLumbarB.GetSpacing()
+                voxel_volume_bilateral_lumbar = np.prod(spacing_bilateral_lumbar)
+
+                volumes_bilateral_lumbar = {}
+                for label in range(1, multilabelNum + 1):
+                    label_vox = np.sum(segmentation_array_bilateral_lumbar == label)
+                    volumes_bilateral_lumbar[label] = label_vox * voxel_volume_bilateral_lumbar
+
+                print("\n Volumes (Lumbar Short FOV):")
+                for label, vol in volumes_bilateral_lumbar.items():
+                    print(f"  • Label {label}: {vol:.2f} mm³")
+
+                fat_fraction_means_bilateral_lumbar = {}
+                if (bilateral_f_lumbar_cut is not None) and (bilateral_w_lumbar_cut is not None):
+                    fatImageB = sitk.Cast(bilateral_f_lumbar_cut, sitk.sitkFloat32)
+                    waterImageB = sitk.Cast(bilateral_w_lumbar_cut, sitk.sitkFloat32)
+                    waterfatB = sitk.Add(fatImageB, waterImageB)
+                    ffB = sitk.Divide(fatImageB, waterfatB)
+                    ffB = sitk.Cast(
+                        sitk.Mask(ffB, waterfatB > 0, outsideValue=0, maskingValue=0),
+                        sitk.sitkFloat32
+                    )
+
+                    ff_array_bilateral_lumbar = sitk.GetArrayFromImage(ffB)
+                    for label in range(1, multilabelNum + 1):
+                        mask_l = (segmentation_array_bilateral_lumbar == label)
+                        fat_fraction_means_bilateral_lumbar[label] = float(np.mean(ff_array_bilateral_lumbar[mask_l])) if np.any(
+                            mask_l) else None
+                else:
+                    print(f"[WARN] No W/F images found for bilateral lumbar FF in {subject}")
+
+                print("\n Fat Fraction (Lumbar Short FOV):")
+                for label, ff in fat_fraction_means_bilateral_lumbar.items():
+                    if ff is not None:
+                        print(f"  • Label {label}: {ff:.4f}")
+                    else:
+                        print(f"  • Label {label}: no valid values")
+            else:
+                print(f"[WARN] No cropped in-phase bilateral image found for lumbar region in {subject}. Skipping lumbar shortFOV segmentation.")
 
     # TOTAL VOLUME:
     single_array = sitk.GetArrayFromImage(output_single_mask)
@@ -916,8 +1014,10 @@ for idx, row in subset.iterrows():
                             skinfat_total=skinFat_total_vol,
                             skinfat_pelvis=skinFat_pelvis_vol,
                             subject_name=subject,
-                            volumes_short=volumes_bilateral,
-                            ffs_short=fat_fraction_means_bilateral)
+                            volumes_short=volumes_bilateral, #Pelvis Short FOV
+                            ffs_short=fat_fraction_means_bilateral, # Pelvis Short FOV
+                            volumes_lumbar_short=volumes_bilateral_lumbar, #Lumbar Short FOV (Added)
+                            ffs_lumbar_short=fat_fraction_means_bilateral_lumbar) #Lumbar Short FOV (Added)
 
 
 

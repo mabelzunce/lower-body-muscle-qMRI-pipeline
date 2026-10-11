@@ -3,6 +3,7 @@ import SimpleITK as sitk, torch, imageio
 import numpy as np
 import multiprocessing
 import os
+import matplotlib.pyplot as plt
 from skimage.morphology import convex_hull_image
 
 
@@ -567,6 +568,57 @@ def create_segmentation_overlay_animated_gif(sitkImage, sitkLabels, output_path)
     imageio.mimsave(output_path, frames, duration=0.1)
     print(f"GIF saved to {output_path}")
 
+# -----------------
+# GIF creation for ShortFOV segmentations 
+def create_segmentation_overlay_animated_gif_shortfov(sitkImage, sitkLabels, output_path):
+    # 1. Rescale image intensity to [0, 255] and cast to uint8 (prevents black screen)
+    sitkImage_uint8 = sitk.Cast(sitk.RescaleIntensity(sitkImage, 0, 255), sitk.sitkUInt8)
+    
+    # 2. Cast labels to uint8 and match spatial metadata with the base image
+    sitkLabels_uint8 = sitk.Cast(sitkLabels, sitk.sitkUInt8)
+    sitkLabels_uint8.CopyInformation(sitkImage_uint8)
+
+    frames = []
+    imageSize = sitkImage_uint8.GetSize()
+
+    for i in range(imageSize[2]):
+        fig, ax = plt.subplots(figsize=(6, 6))
+
+        # Extract 2D slices
+        img_slice = sitkImage_uint8[:, :, i]
+        label_slice = sitk.Cast(sitkLabels_uint8[:, :, i], sitk.sitkLabelUInt8)
+
+        # Generate contour overlay on uint8 image
+        contour_overlaid_image = sitk.LabelMapContourOverlay(
+            label_slice,
+            img_slice,
+            opacity=1.0,
+            contourThickness=[3, 3],
+            dilationRadius=[2, 2]
+        )
+
+        # Convert overlaid image slice to NumPy RGB array (shape: Y, X, 3)
+        arr = sitk.GetArrayFromImage(contour_overlaid_image)
+
+        # Display RGB image directly
+        ax.imshow(arr, origin='lower', interpolation='none')
+        ax.axis('off')
+
+        # Capture frame buffer
+        fig.canvas.draw()
+        try:
+            frame = np.asarray(fig.canvas.buffer_rgba())[:, :, :3]
+        except AttributeError:
+            frame = np.array(fig.canvas.renderer.buffer_rgba())[:, :, :3]
+            frame = frame.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+
+        frames.append(frame)
+        plt.close(fig)
+
+    imageio.mimsave(output_path, frames, duration=0.1)
+    print(f"GIF saved to {output_path}")
+
+#-------------------------
 
 
 # Función para cargar archivos .mhd
@@ -731,11 +783,12 @@ def load_tissue_segmentations(folder):
     print(f"Total de archivos encontrados: {len(segmentations)}")
     return segmentations
 
+#----Updated to handle lumbar and pelvis shortFOV metrics separately
 def write_vol_ff_simple_csv(output_csv_path, volumes_lumbar, ffs_lumbar,
                             volumes_pelvis, ffs_pelvis,
                             skinfat_total=None, skinfat_pelvis=None,
                             subject_name="NA",
-                            volumes_short=None, ffs_short=None):
+                            volumes_short=None, ffs_short=None, volumes_lumbar_short=None, ffs_lumbar_short=None ):
 
     import os
     import pandas as pd
@@ -752,7 +805,10 @@ def write_vol_ff_simple_csv(output_csv_path, volumes_lumbar, ffs_lumbar,
     new_row["Vol skinFat_pelvis"] = skinfat_pelvis if skinfat_pelvis is not None else ""
 
     for i in range(1, 9):
-        new_row[f"Vol ShortFOV_{i}"] = volumes_short.get(i, "") if volumes_short else ""
+        new_row[f"Vol Pelvis ShortFOV_{i}"] = volumes_short.get(i, "") if volumes_short else ""
+
+    for i in range(1, 9):
+        new_row[f"Vol Lumbar ShortFOV_{i}"] = volumes_lumbar_short.get(i, "") if volumes_lumbar_short else ""
 
     # ----- FF -----
     for i in range(1, 9):
@@ -760,7 +816,10 @@ def write_vol_ff_simple_csv(output_csv_path, volumes_lumbar, ffs_lumbar,
         new_row[f"FF Pelvis_{i}"] = ffs_pelvis.get(i, "")
 
     for i in range(1, 9):
-        new_row[f"FF ShortFOV_{i}"] = ffs_short.get(i, "") if ffs_short else ""
+        new_row[f"FF Pelvis ShortFOV_{i}"] = ffs_short.get(i, "") if ffs_short else ""
+
+    for i in range(1, 9):
+        new_row[f"FF Lumbar ShortFOV_{i}"] = ffs_lumbar_short.get(i, "") if ffs_lumbar_short else ""
 
     new_row_df = pd.DataFrame([new_row])
 
