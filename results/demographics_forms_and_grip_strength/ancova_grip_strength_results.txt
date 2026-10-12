@@ -1,0 +1,96 @@
+=== ANCOVA Analysis for Grip Strength ===
+
+Sample size: 74
+
+--- ANCOVA for Mean Grip Strength ---
+               sum_sq    df          F        PR(>F)
+C(Grupo)  1128.013175   2.0  15.301962  3.160502e-06
+C(Sexo)   3617.431053   1.0  98.143879  6.855292e-15
+Edad       218.118581   1.0   5.917736  1.758630e-02
+Residual  2543.232919  69.0        NaN           NaN
+
+                            OLS Regression Results                            
+==============================================================================
+Dep. Variable:              Mean_Grip   R-squared:                       0.624
+Model:                            OLS   Adj. R-squared:                  0.602
+Method:                 Least Squares   F-statistic:                     28.66
+Date:                Mon, 12 Oct 2026   Prob (F-statistic):           4.87e-14
+Time:                        09:48:10   Log-Likelihood:                -235.88
+No. Observations:                  74   AIC:                             481.8
+Df Residuals:                      69   BIC:                             493.3
+Df Model:                           4                                         
+Covariance Type:            nonrobust                                         
+==========================================================================================
+                             coef    std err          t      P>|t|      [0.025      0.975]
+------------------------------------------------------------------------------------------
+Intercept                 39.8891      4.914      8.117      0.000      30.085      49.693
+C(Grupo)[T.dialisis]      -9.9428      1.912     -5.200      0.000     -13.757      -6.128
+C(Grupo)[T.trasplante]    -8.4818      1.843     -4.603      0.000     -12.158      -4.806
+C(Sexo)[T.Masculino]      14.8431      1.498      9.907      0.000      11.854      17.832
+Edad                      -0.2516      0.103     -2.433      0.018      -0.458      -0.045
+==============================================================================
+Omnibus:                        1.268   Durbin-Watson:                   2.206
+Prob(Omnibus):                  0.530   Jarque-Bera (JB):                0.711
+Skew:                          -0.195   Prob(JB):                        0.701
+Kurtosis:                       3.279   Cond. No.                         338.
+==============================================================================
+
+Notes:
+[1] Standard Errors assume that the covariance matrix of the errors is correctly specified.
+
+Post-hoc Tukey HSD for Group (Mean Grip Strength):
+   Multiple Comparison of Means - Tukey HSD, FWER=0.05    
+==========================================================
+ group1    group2   meandiff p-adj   lower   upper  reject
+----------------------------------------------------------
+ control   dialisis  -5.5792 0.1168 -12.2188 1.0603  False
+ control trasplante  -3.8163 0.3462 -10.3397 2.7072  False
+dialisis trasplante   1.7629 0.7819  -4.5411  8.067  False
+----------------------------------------------------------
+
+--- ANCOVA for Max Grip Strength ---
+               sum_sq    df           F        PR(>F)
+C(Grupo)  1241.119595   2.0   14.694025  4.828168e-06
+C(Sexo)   5221.342294   1.0  123.634396  4.907547e-17
+Edad       248.203034   1.0    5.877116  1.796313e-02
+Residual  2914.016076  69.0         NaN           NaN
+
+                            OLS Regression Results                            
+==============================================================================
+Dep. Variable:           Max_Any_Side   R-squared:                       0.665
+Model:                            OLS   Adj. R-squared:                  0.646
+Method:                 Least Squares   F-statistic:                     34.24
+Date:                Mon, 12 Oct 2026   Prob (F-statistic):           9.84e-16
+Time:                        09:48:10   Log-Likelihood:                -240.91
+No. Observations:                  74   AIC:                             491.8
+Df Residuals:                      69   BIC:                             503.3
+Df Model:                           4                                         
+Covariance Type:            nonrobust                                         
+==========================================================================================
+                             coef    std err          t      P>|t|      [0.025      0.975]
+------------------------------------------------------------------------------------------
+Intercept                 43.2765      5.260      8.227      0.000      32.782      53.771
+C(Grupo)[T.dialisis]     -10.3839      2.047     -5.073      0.000     -14.467      -6.301
+C(Grupo)[T.trasplante]    -8.9664      1.973     -4.546      0.000     -12.902      -5.031
+C(Sexo)[T.Masculino]      17.8327      1.604     11.119      0.000      14.633      21.032
+Edad                      -0.2684      0.111     -2.424      0.018      -0.489      -0.048
+==============================================================================
+Omnibus:                        1.564   Durbin-Watson:                   2.057
+Prob(Omnibus):                  0.458   Jarque-Bera (JB):                0.926
+Skew:                          -0.110   Prob(JB):                        0.630
+Kurtosis:                       3.502   Cond. No.                         338.
+==============================================================================
+
+Notes:
+[1] Standard Errors assume that the covariance matrix of the errors is correctly specified.
+
+Post-hoc Tukey HSD for Group (Max Grip Strength):
+   Multiple Comparison of Means - Tukey HSD, FWER=0.05    
+==========================================================
+ group1    group2   meandiff p-adj   lower   upper  reject
+----------------------------------------------------------
+ control   dialisis  -4.9949 0.2649 -12.6065 2.6167  False
+ control trasplante  -3.2761 0.5489 -10.7545 4.2023  False
+dialisis trasplante   1.7188 0.8368  -5.5082 8.9458  False
+----------------------------------------------------------
+
