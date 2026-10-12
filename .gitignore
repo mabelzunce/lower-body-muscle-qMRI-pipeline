@@ -20,3 +20,4 @@ src/segmentation/result.0.mhd
 src/segmentation/result.0.nii
 src/segmentation/result.0.raw
 data/.~lock.all_subjects_volumes_and_ffs.csv#
+.vscode/settings.json
